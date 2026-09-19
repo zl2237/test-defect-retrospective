@@ -28,24 +28,27 @@ python scripts/cli.py session show
 ```
 
 - 输出中 `answers_complete: true` → 跳过问卷，直接进入第 3 步（目录初始化）。
-- 否则按 Q1→Q5 顺序找到第一个未答题目，从该题继续提问（已收集信息不重复问）。
+- 否则按 Q1→Q4 顺序找到第一个未答题目，从该题继续提问（已收集信息不重复问）。
 
 ### 2. 交互式问卷（使用 AskUserQuestion 工具；每收到一个答案立即落盘保存）
 
-| 序 | 问题（session key） | 选项 | 分支逻辑 |
+**问卷设计原则：只问直接影响分析执行的问题**（4 题）。文件格式类信息不设问——解析器按扩展名与表头自适应（docx/md/txt/CSV/Excel/XMind 自动识别）。
+
+| 序 | 问题（session key） | 选项 | 分支逻辑 / 对分析的作用 |
 |---|---|---|---|
-| Q1 | 缺陷管理平台（defect_platform） | Jira / 禅道 / 其他 | 选「其他」→ 追问：① 导出文件格式（CSV/Excel/其他）② 核心字段说明（列名→含义）。据答案将「原始列名→标准字段」写入 `scripts/custom_field_map.json`（字段对照见附录A），然后按 `defect_platform=custom` 保存 |
-| Q2 | 需求文档托管平台（req_platform） | Confluence / 企微微盘 / 其他 | 无 |
-| Q3 | 需求文件主要格式（req_format） | 纯文本 / 图片 / 流程图 / 在线链接 | 无 |
-| Q4 | 测试用例来源与文件格式（testcase_source） | Excel / 平台导出 / 其他 | 无 |
-| Q5 | 是否有上一版本复盘报告用于环比（has_prev_report） | 是 / 否 | 选「是」→ 追问上一版本对应目录路径，保存为 `prev_report_path` |
+| Q1 | 本次缺陷数据来自哪个平台？（defect_platform） | Jira / 禅道 / 其他平台 | 决定解析插件（parse 的 auto 探测以此兜底）。选「其他平台」→ 追问：① 导出文件格式 ② 核心字段说明（列名→含义），据答案将「原始列名→标准字段」写入 `scripts/custom_field_map.json`（字段对照见附录A），然后按 `defect_platform=custom` 保存 |
+| Q2 | 本版本的发布（上线）时间是？（release_time） | 输入 `YYYY-MM-DD HH:MM` / 不清楚 | **存量遗留缺陷判定基准**。选「不清楚」→ 保存 `release_time=unknown`，analyze 省略 `--release-time`，脚本以缺陷最大创建时间近似并在报告标注口径 |
+| Q3 | 上一版本的复盘数据在哪？（has_prev_report） | 同项目目录下（自动探测）/ 在其他位置 / 没有 | **版本环比与规律性反复缺陷依据**。同项目目录→语义排序自动探测；其他位置→追问路径保存 `prev_report_path`；没有→环比章节标注缺失 |
+| Q4 | 人员角色名单 人员角色.csv？（team_roles） | 已准备好 / 不提供 | **人员效能角色口径**。不提供→按「提报人=测试、解决人=开发」近似，报告显式警示角色混入风险；已准备好→仅「测试」计入提报/验证效能、「前端/后端」计入修复效能，混入角色自动剔除 |
 
 落盘命令示例（每答一题执行一次，中途退出后信息不丢失）：
 
 ```
 python scripts/cli.py session set --answer defect_platform=jira
+python scripts/cli.py session set --answer release_time="2026-09-01 10:00"
 python scripts/cli.py session set --answer has_prev_report=true
 python scripts/cli.py session set --answer prev_report_path="项目A/v2.3.0"
+python scripts/cli.py session set --answer team_roles=true
 ```
 
 ### 3. 目录初始化
@@ -75,6 +78,12 @@ python scripts/cli.py init --root "{项目名}/{版本号}"
 未登记人员按「未登记」计入并提示补填。未提供时按「提报人=测试、解决人=开发」近似，
 并在报告中显式警示角色混入风险。
 
+**文件格式说明**（无需问卷确认，解析器自动识别）：
+- 需求文档：docx（自动提取，含删除线识别）/ md / txt；**图片与在线链接请导出为文本后放入**，否则对应评估按缺失标注
+- 测试用例：CSV / Excel / XMind（中心主题=套件、中间层级=模块、叶子=用例、优先级图标→P0~P3）
+- 技术方案：docx / md / txt
+- 缺陷导出：CSV / Excel（Jira/禅道表头自动识别）
+
 等待用户确认文件就位后，进入分析流程。
 
 ## 二、分析执行流程
@@ -87,9 +96,9 @@ python scripts/cli.py scan --root "{项目名}/{版本号}"
 
 - 向用户展示「缺失素材清单」（JSON 同时存入 reports/素材校验_{时间戳}.json）。
 - 输出 `mode` 字段判定运行模式（见开头路由表）：`retrospective`=复盘模式（走第 2~5 步）；`review`=定性评审模式（走第 3R 步）。
-- 同时询问用户「当前版本发布时间」（存量遗留缺陷判定基准，格式 `YYYY-MM-DD HH:MM`）。用户无法提供 → 执行 analyze 时不传 `--release-time`，脚本自动以缺陷最大创建时间近似，并在报告中标注口径说明。
+- 发布时间已在问卷 Q2 收集：分析执行时直接读取 session 的 `release_time`（值为 `unknown` 时省略 `--release-time`），scan 阶段不再重复询问。
 
-### 第 2 步：解析（复盘模式；产出统一标准中间数据集）
+### 第 2 步：解析（产出统一标准中间数据集）
 
 ```
 python scripts/cli.py parse --root "{项目名}/{版本号}" [--platform jira|zentao|custom|auto]
@@ -99,7 +108,7 @@ python scripts/cli.py parse --root "{项目名}/{版本号}" [--platform jira|ze
 - `--platform auto`（默认）按表头特征自动识别 Jira / 禅道。
 - 若问卷 Q1 选「其他」：使用 `scripts/custom_field_map.json` 映射（custom 解析插件）。
 
-### 第 3 步：分析与产物生成（复盘模式）
+### 第 3 步：分析与产物生成
 
 ```
 python scripts/cli.py analyze --root "{项目名}/{版本号}" [--release-time "YYYY-MM-DD HH:MM"] [--prev-root 上一版本目录]
@@ -122,7 +131,7 @@ python scripts/cli.py html --root "{项目名}/{版本号}"
 - **仪表板模式**（存在指标 JSON）：`复盘报告_汇总_{ts}.html`
   - 单文件自包含（内嵌 CSS/JS/SVG 图表，零外部依赖），可离线打开、下载、迁移分享
   - 读取最新指标全量 JSON + 三份最新 md 报告（**含已追加的 AI 定性段落**），合并渲染
-  - 总览 Tab：核心读数窗、严重程度能量谱、优先级/模块 TOP10/生命周期耗时条形图、缺失清单
+  - 总览 Tab：核心读数窗、严重程度环形图、优先级/模块 TOP10/生命周期耗时条形图、缺失清单
   - 开发/测试/产品 Tab：对应全部固定章节（量化表格 + 绿色【AI分析】卡片）
   - 内嵌全量指标 JSON（`<script type="application/json">`）供其他工具取数；支持打印（Ctrl+P 自动展开全部 Tab 分页）
 - **文档模式**（无指标 JSON，存在评审报告 md）：自动渲染各类型评审报告（`需求评审报告_*` / `用例评审报告_*` / `技术评审报告_*`，每类取最新一份）为对应档案风 HTML（档案头 + 蓝章 + 方章章节 + 档案表格）；亦可用 `--doc <md路径>` 强制渲染任意 md 报告。
@@ -139,9 +148,10 @@ python scripts/cli.py html --root "{项目名}/{版本号}"
 - 报告头部标注运行模式与量化缺失项
 
 **3R.2 测试用例评审**（test_cases/ 有文件）→ 产出 `用例评审报告_{版本}_{ts}.md`
+- 输入格式：CSV / Excel / **XMind**（.xmind 自动解析：中心主题=套件名、中间层级=模块路径、叶子节点=用例标题、优先级图标 priority-1~6 → P0~P3；兼容 XMind 8 content.xml 与 Zen content.json；XMind 无执行状态，status 记「未执行」）
 - 量化底稿：用 python 调 `analyzer.parse_testcases(test_cases目录)` 统计用例总数/状态分布/模块分布/需求关联率/回归标记占比（命令示例：`python -c "import sys; sys.path.insert(0,'scripts'); import analyzer as az, json; c,w=az.parse_testcases(r'<test_cases路径>'); print(json.dumps({'total':len(c or []),'warnings':w},ensure_ascii=False))"`）
-- 定性评审框架：结构完整性（编号/标题/前置/步骤/预期五要素齐备率）→ 覆盖设计（模块均衡度、需求关联完整率、边界/异常/并发/弱网关键词占比）→ 文案可判定性（步骤可执行、预期可断言，主观词识别）→ 优先级与回归标记合理性 → 澄清清单
-- 报告头部标注运行模式
+- 定性评审框架：结构完整性（编号/标题/前置/步骤/预期五要素齐备率；XMind 用例聚焦层级组织合理性）→ 覆盖设计（模块均衡度、需求关联完整率、边界/异常/并发/弱网关键词占比）→ 文案可判定性（步骤可执行、预期可断言，主观词识别）→ 优先级与回归标记合理性（XMind 用例用图标优先级）→ 澄清清单
+- 报告头部标注运行模式；复盘模式中 XMind 用例无执行状态，执行类指标按「未执行」口径并标注提示
 
 **3R.3 技术方案评审**（tech_designs/ 有文件）→ 产出 `技术评审报告_{版本}_{ts}.md`
 - 文档读取同 3R.1（docx 提取/md/txt 直读）
@@ -150,7 +160,7 @@ python scripts/cli.py html --root "{项目名}/{版本号}"
 
 **3R.4 复盘模式叠加技术评审**：scan 判定 retrospective 且 tech_designs/ 有文件时，复盘产物完成后追加执行 3R.3。
 
-### 第 4 步：AI 定性补充（复盘模式；只追加，不删改脚本产出的量化表格）
+### 第 4 步：AI 定性补充（只追加，不删改脚本产出的量化表格）
 
 脚本完成全部确定性量化计算后，AI 阅读数据与原始文件，向报告对应章节**追加**以下定性内容：
 
@@ -170,7 +180,7 @@ python scripts/cli.py html --root "{项目名}/{版本号}"
 - 确认所有无法分析项已按第六节规则集中标注。
 - 执行第 3.5 步生成 HTML（复盘模式=仪表板；评审模式=文档模式自动渲染各评审报告），向用户报告产物文件路径清单。
 
-## 三、全量分析指标口径（复盘模式；一项不缺；同输入必同输出）
+## 三、全量分析指标口径（一项不缺；同输入必同输出）
 
 > 详细实现见 `scripts/analyzer.py`。以下口径为唯一标准，AI 不得自行更改。
 
@@ -219,7 +229,7 @@ python scripts/cli.py html --root "{项目名}/{版本号}"
 - 输出变化点、进步点、核心短板。
 - 匹配规则：同项目目录下按版本号语义排序自动取上一版本。
 
-### 4. 需求文档评审（复盘模式引用 requirements/；独立评审见第 3R.1 步）
+### 4. 需求文档评审（需 requirements/ 需求文档）
 
 - **docx 文档处理**：先用 `python scripts/docx_extract.py "<docx路径>"` 提取纯文本（标准库实现）；被删除线标记的段落输出「[删除线] 」前缀——用于识别废弃需求范围与范围矛盾（删除线章节 vs 正文残留引用需重点核查一致性）；docx 内嵌图片不可读，按缺失规则标注。
 - 需求质量评估：逻辑自洽性、重复赘述、文案可读性、提示语清晰度（AI 四维评估）。
@@ -230,11 +240,11 @@ python scripts/cli.py html --root "{项目名}/{版本号}"
 - 缺陷前置溯源：根因=需求问题的缺陷占比。
 - 上下游依赖缺失导致的联调缺陷：标题/备注含「联调/依赖/上游/下游/接口对接」的缺陷清单与占比。
 
-### 5. 测试执行指标（需 test_cases/ 用例文件；独立用例评审见第 3R.2 步）
+### 5. 测试执行指标（需 test_cases/ 用例文件）
 
 | 指标 | 计算口径 |
 |---|---|
-| 用例总数 | test_cases/ 全部文件解析的用例条目数 |
+| 用例总数 | test_cases/ 全部文件解析的用例条目数（CSV/Excel/XMind） |
 | 执行状态分布 | 通过/失败/阻塞/跳过/未执行 数量与占比 |
 | 用例执行覆盖率 | （通过+失败）÷ 用例总数 × 100% |
 | 需求-用例双向覆盖 | ① 缺陷关联需求中被用例覆盖比例；② 用例关联需求完整率；③ 未被用例覆盖的需求清单 |
