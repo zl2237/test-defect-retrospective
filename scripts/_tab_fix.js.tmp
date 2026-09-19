@@ -1,0 +1,25 @@
+<script>
+var bs=document.querySelectorAll('.index button');
+/* 读数窗口数字滚动 */
+function countUp(el){var t=parseFloat(el.getAttribute('data-v'));
+if(isNaN(t)){el.textContent=el.getAttribute('data-v');return;}
+var dec=(String(el.getAttribute('data-v')).split('.')[1]||'').length;
+var st=performance.now();function f(now){var p=Math.min((now-st)/900,1);
+p=1-Math.pow(1-p,3);el.textContent=(t*p).toFixed(dec);
+if(p<1)requestAnimationFrame(f);}requestAnimationFrame(f);}
+/* Tab 切换：切换面板并触发数字滚动。
+   注意 onclick 为属性赋值，重复赋值会互相覆盖，必须合并为单一处理器 */
+function showTab(b){
+document.querySelectorAll('.index button').forEach(function(x){x.classList.remove('active')});
+document.querySelectorAll('.panel').forEach(function(p){p.classList.remove('active')});
+b.classList.add('active');
+var p=document.getElementById('tab-'+b.dataset.tab);
+if(p){p.classList.add('active');
+setTimeout(function(){p.querySelectorAll('.val span[data-v]').forEach(countUp);},30);}
+window.scrollTo({top:0});}
+bs.forEach(function(b){b.onclick=function(){showTab(b);};});
+document.querySelectorAll('.panel.active .val span[data-v]').forEach(countUp);
+var tt=document.getElementById('toTop');
+window.onscroll=function(){tt.style.display=window.scrollY>420?'block':'none';};
+tt.onclick=function(){window.scrollTo({top:0,behavior:'smooth'});};
+</script>
