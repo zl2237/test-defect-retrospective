@@ -1,13 +1,16 @@
 # -*- coding: utf-8 -*-
 """CLI 入口：session / init / scan / parse / analyze / html / all。
 
+模式路由：defects 有文件 → 复盘模式（parse→analyze）；无 defects 时
+requirements/test_cases/tech_designs 有文件 → 定性评审模式（AI 评审 + html 文档模式）。
+
 用法示例（在 Skill 目录下执行）：
   python scripts/cli.py session show
   python scripts/cli.py init --root "项目A/v2.4.0"
-  python scripts/cli.py scan --root "项目A/v2.4.0"
-  python scripts/cli.py parse --root "项目A/v2.4.0"
+  python scripts/cli.py scan   --root "项目A/v2.4.0"   # 素材校验 + 模式路由判定
+  python scripts/cli.py parse  --root "项目A/v2.4.0"   # 复盘模式
   python scripts/cli.py analyze --root "项目A/v2.4.0" --release-time "2026-09-01 10:00"
-  python scripts/cli.py html --root "项目A/v2.4.0"   # 仪表板模式（有指标）/ 文档模式（纯需求评审）
+  python scripts/cli.py html   --root "项目A/v2.4.0"   # 仪表板/文档模式自动识别
 """
 import argparse
 import glob
@@ -32,7 +35,9 @@ SESSION_FILE = os.path.join(SKILL_DIR, '.session.json')
 # 问卷题目顺序（断点续跑依据）
 SESSION_QUESTIONS = ['defect_platform', 'req_platform', 'req_format',
                      'testcase_source', 'has_prev_report']
-DEFECT_DIRS = ('defects', 'requirements', 'test_cases', 'reports')
+# 输入目录（全部可选，按存在文件路由评审模式）
+# defects → 复盘模式；requirements/test_cases/tech_designs → 定性评审模式
+DEFECT_DIRS = ('defects', 'requirements', 'test_cases', 'tech_designs', 'reports')
 
 
 def _ts():
@@ -118,7 +123,7 @@ def _split_root(root):
 
 
 # ---------------------------------------------------------------------------
-# scan：素材校验（前置校验，输出缺失素材清单）
+# scan：素材校验 + 模式路由判定（前置校验，输出缺失素材清单）
 # ---------------------------------------------------------------------------
 
 def _list_input_files(path):
@@ -166,26 +171,48 @@ def cmd_scan(args):
         return result
 
     defects = _list_input_files(os.path.join(root, 'defects'))
-    reqs = _list_input_files(os.path.join(root, 'requirements'))
     reqs_all = ([f for f in sorted(os.listdir(os.path.join(root, 'requirements')))]
                 if os.path.isdir(os.path.join(root, 'requirements')) else [])
     tcs = _list_input_files(os.path.join(root, 'test_cases'))
     team_role_file = os.path.join(root, '人员角色.csv')
+    # 技术方案文档（docx/md/txt 等全量文件均计入，不做扩展名过滤）
+    techs_all = ([f for f in sorted(os.listdir(os.path.join(root, 'tech_designs')))]
+                 if os.path.isdir(os.path.join(root, 'tech_designs')) else [])
 
     result['defects_files'] = defects
     result['requirements_files'] = reqs_all
     result['testcase_files'] = tcs
+    result['tech_design_files'] = techs_all
     result['team_role_file'] = os.path.basename(team_role_file) \
         if os.path.exists(team_role_file) else None
     if not os.path.exists(team_role_file):
         result['warnings'].append(
             '未找到 人员角色.csv（姓名,角色；角色：前端/后端/产品/测试），'
             '人员效能将按「提报人=测试、解决人=开发」近似，存在角色混入风险')
-    if not defects:
-        result['missing'].append('defects/ 目录缺少缺陷导出文件（CSV/Excel），核心分析无法执行')
-    if not reqs_all:
+
+    # 模式路由：defects 有文件 → 复盘模式；否则按各目录内容做定性评审
+    if defects:
+        result['mode'] = 'retrospective'
+        if techs_all:
+            result['warnings'].append(
+                '检测到 tech_designs/ 文件，复盘完成后应追加技术方案评审报告')
+    else:
+        result['mode'] = 'review'
+        reviewable = []
+        if reqs_all:
+            reviewable.append('需求评审(requirements)')
+        if tcs:
+            reviewable.append('测试用例评审(test_cases)')
+        if techs_all:
+            reviewable.append('技术方案评审(tech_designs)')
+        if reviewable:
+            result['missing'].append(
+                '未检测到缺陷导出 → 进入定性评审模式：%s' % '、'.join(reviewable))
+        else:
+            result['missing'].append('所有输入目录均为空，无可分析素材')
+    if not reqs_all and defects:
         result['missing'].append('requirements/ 目录为空，需求评审类章节将标注数据缺失')
-    if not tcs:
+    if not tcs and defects:
         result['missing'].append('test_cases/ 目录为空，用例执行/覆盖率类章节将标注数据缺失')
 
     prev_root = detect_prev_version(root)
@@ -212,7 +239,7 @@ def cmd_scan(args):
 
 
 # ---------------------------------------------------------------------------
-# parse：解析缺陷导出 → 统一标准中间数据集
+# parse：解析缺陷导出 → 统一标准中间数据集（复盘模式）
 # ---------------------------------------------------------------------------
 
 def _parse_defects(root, platform):
@@ -274,7 +301,7 @@ def cmd_parse(args):
 
 
 # ---------------------------------------------------------------------------
-# analyze：全量指标 + 三类产物
+# analyze：全量指标 + 三类产物（复盘模式）
 # ---------------------------------------------------------------------------
 
 def _load_json(path):
@@ -345,14 +372,15 @@ def cmd_analyze(args):
 
 def cmd_all(args):
     scan = cmd_scan(args)
-    if not scan.get('defects_files'):
-        raise SystemExit('缺失素材：defects/ 无缺陷导出文件，分析终止（详见上方缺失清单）')
+    if scan.get('mode') != 'retrospective':
+        raise SystemExit('scan 判定非复盘模式（无缺陷导出），请走定性评审流程；'
+                         '详见上方缺失清单')
     cmd_parse(args)
     return cmd_analyze(args)
 
 
 # ---------------------------------------------------------------------------
-# html：汇总 HTML（仪表板模式 / 文档模式自动识别）
+# html：汇总 HTML（复盘=仪表板模式 / 评审=文档模式，自动识别）
 # ---------------------------------------------------------------------------
 
 def _md_sections(md_text):
@@ -372,11 +400,24 @@ def cmd_html(args):
     reports_dir = os.path.join(root, 'reports')
     metrics_file = getattr(args, 'metrics_file', None) or _latest(
         reports_dir, '复盘数据_指标全量_')
-    # 文档模式：--doc 指定 md，或无指标 JSON 时自动查找最新需求评审报告
+    # 文档模式：--doc 指定 md；或无指标 JSON 时自动渲染各类型评审报告（每类取最新一份）
     doc_file = getattr(args, 'doc', None)
     if doc_file is None and not (metrics_file and os.path.exists(metrics_file)):
-        docs = sorted(glob.glob(os.path.join(reports_dir, '需求评审报告_*.md')))
-        doc_file = docs[-1] if docs else None
+        doc_files = []
+        for prefix in ('需求评审报告_', '用例评审报告_', '技术评审报告_'):
+            docs = sorted(glob.glob(os.path.join(reports_dir, prefix + '*.md')))
+            if docs:
+                doc_files.append((prefix, docs[-1]))
+        if doc_files:
+            outs = []
+            stamp_map = {'需求评审报告_': '需求评审', '用例评审报告_': '用例评审',
+                         '技术评审报告_': '技术评审'}
+            for prefix, df in doc_files:
+                outs.append(reporter.write_doc_html(
+                    df, reports_dir, stamp=stamp_map.get(prefix, '评审')))
+            _print_json({'outputs': outs, 'mode': 'doc',
+                         'source_docs': [os.path.basename(d) for _, d in doc_files]})
+            return outs
     if doc_file:
         if not os.path.exists(doc_file):
             raise SystemExit('未找到文档: %s' % doc_file)
@@ -385,7 +426,7 @@ def cmd_html(args):
                      'source_doc': os.path.basename(doc_file)})
         return out
     if not metrics_file or not os.path.exists(metrics_file):
-        raise SystemExit('未找到指标全量 JSON（请先执行 analyze）或需求评审报告 md')
+        raise SystemExit('未找到指标全量 JSON（请先执行 analyze）或任一评审报告 md')
     metrics = _load_json(metrics_file)
 
     sections_by_cat = {}
@@ -408,7 +449,7 @@ def cmd_html(args):
 # ---------------------------------------------------------------------------
 
 def main():
-    ap = argparse.ArgumentParser(description='测试缺陷复盘 Skill CLI')
+    ap = argparse.ArgumentParser(description='测试缺陷复盘与文档评审 Skill CLI')
     sub = ap.add_subparsers(dest='cmd', required=True)
 
     sp = sub.add_parser('session', help='问卷会话（断点续跑）')
@@ -419,28 +460,28 @@ def main():
                     help='key=value，可重复，如 --answer defect_platform=jira')
     sp.set_defaults(func=cmd_session)
 
-    sp = sub.add_parser('init', help='初始化 {项目名}/{版本号} 目录')
+    sp = sub.add_parser('init', help='初始化 {项目名}/{版本号} 目录（含 tech_designs）')
     sp.add_argument('--root', required=True)
     sp.set_defaults(func=cmd_init)
 
-    sp = sub.add_parser('scan', help='素材校验，输出缺失素材清单')
+    sp = sub.add_parser('scan', help='素材校验 + 模式路由判定（复盘/定性评审）')
     sp.add_argument('--root', required=True)
     sp.set_defaults(func=cmd_scan)
 
-    sp = sub.add_parser('parse', help='解析缺陷导出 → 标准中间数据集')
+    sp = sub.add_parser('parse', help='[复盘模式] 解析缺陷导出 → 标准中间数据集')
     sp.add_argument('--root', required=True)
     sp.add_argument('--platform', default='auto',
                     choices=['auto', 'jira', 'zentao', 'custom'])
     sp.set_defaults(func=cmd_parse)
 
-    sp = sub.add_parser('analyze', help='全量指标计算 + 三类产物生成')
+    sp = sub.add_parser('analyze', help='[复盘模式] 全量指标计算 + 三类产物生成')
     sp.add_argument('--root', required=True)
     sp.add_argument('--release-time', help='当前版本发布时间 YYYY-MM-DD HH:MM')
     sp.add_argument('--prev-root', help='上一版本目录（默认语义排序自动探测）')
     sp.add_argument('--defects-file', help='指定标准中间数据集 JSON（默认取最新）')
     sp.set_defaults(func=cmd_analyze)
 
-    sp = sub.add_parser('all', help='scan + parse + analyze 串联')
+    sp = sub.add_parser('all', help='[复盘模式] scan + parse + analyze 串联')
     sp.add_argument('--root', required=True)
     sp.add_argument('--release-time')
     sp.add_argument('--prev-root')
@@ -448,7 +489,7 @@ def main():
                     choices=['auto', 'jira', 'zentao', 'custom'])
     sp.set_defaults(func=cmd_all)
 
-    sp = sub.add_parser('html', help='生成汇总 HTML（指标仪表板模式 / 纯需求评审文档模式自动识别）')
+    sp = sub.add_parser('html', help='生成汇总 HTML（复盘=仪表板模式 / 评审=文档模式，自动识别）')
     sp.add_argument('--root', required=True)
     sp.add_argument('--metrics-file', help='指定指标全量 JSON（默认取最新）')
     sp.add_argument('--doc', help='指定 Markdown 报告渲染为档案风 HTML（文档模式）')
