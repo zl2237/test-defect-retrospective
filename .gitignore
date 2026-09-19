@@ -1,0 +1,9 @@
+# 本地问卷会话状态（断点续跑，勿提交）
+.session.json
+
+# Python 缓存
+__pycache__/
+*.pyc
+
+# 问卷选择「其他」平台时按用户字段说明生成的映射文件（含用户环境信息）
+custom_field_map.json
