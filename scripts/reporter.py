@@ -381,7 +381,6 @@ def write_reports(metrics, reports_dir):
 # 设计语言：检验单纸面 / 档案编号与条码 / 等宽仪表读数 / 帕累托 / 红章批注
 # ---------------------------------------------------------------------------
 
-# 信号色阶（档案印刷四色 + 严重度灰阶）
 _C = {'ink': '#1b1e22', 'line': '#23272b', 'hair': '#c9c2b2', 'paper': '#f4f0e6',
       'paper2': '#faf7ef', 'red': '#b3261e', 'dred': '#7f1d1d', 'amber': '#a66a08',
       'green': '#256b3a', 'navy': '#1f3a5f', 'gray': '#6b7280', 'lgray': '#9ca3af'}
@@ -390,7 +389,6 @@ SEV_COLORS = {'致命': _C['dred'], '严重': _C['red'], '一般': _C['amber'],
 PRI_COLORS = {'P0': _C['dred'], 'P1': _C['red'], 'P2': _C['amber'],
               'P3': _C['gray'], '未分级': _C['lgray']}
 
-# 纸面噪点纹理（内联 SVG data URI，零外部依赖）
 _NOISE = ("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' "
           "height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' "
           "baseFrequency='.9' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 0 "
@@ -878,22 +876,25 @@ def render_html(metrics, sections_by_cat):
 <script type="application/json" id="metrics-data">%(payload)s</script>
 <script>
 var bs=document.querySelectorAll('.index button');
-bs.forEach(function(b){b.onclick=function(){
-document.querySelectorAll('.index button').forEach(function(x){x.classList.remove('active')});
-document.querySelectorAll('.panel').forEach(function(p){p.classList.remove('active')});
-b.classList.add('active');
-var p=document.getElementById('tab-'+b.dataset.tab);if(p)p.classList.add('active');
-window.scrollTo({top:0});};});
+/* 读数窗口数字滚动 */
 function countUp(el){var t=parseFloat(el.getAttribute('data-v'));
 if(isNaN(t)){el.textContent=el.getAttribute('data-v');return;}
 var dec=(String(el.getAttribute('data-v')).split('.')[1]||'').length;
 var st=performance.now();function f(now){var p=Math.min((now-st)/900,1);
 p=1-Math.pow(1-p,3);el.textContent=(t*p).toFixed(dec);
 if(p<1)requestAnimationFrame(f);}requestAnimationFrame(f);}
+/* Tab 切换：切换面板并触发数字滚动。
+   注意 onclick 为属性赋值，重复赋值会互相覆盖，必须合并为单一处理器 */
+function showTab(b){
+document.querySelectorAll('.index button').forEach(function(x){x.classList.remove('active')});
+document.querySelectorAll('.panel').forEach(function(p){p.classList.remove('active')});
+b.classList.add('active');
+var p=document.getElementById('tab-'+b.dataset.tab);
+if(p){p.classList.add('active');
+setTimeout(function(){p.querySelectorAll('.val span[data-v]').forEach(countUp);},30);}
+window.scrollTo({top:0});}
+bs.forEach(function(b){b.onclick=function(){showTab(b);};});
 document.querySelectorAll('.panel.active .val span[data-v]').forEach(countUp);
-bs.forEach(function(b){b.onclick=function(){
-setTimeout(function(){document.querySelectorAll('.panel.active .val span[data-v]')
-.forEach(countUp);},30);};});
 var tt=document.getElementById('toTop');
 window.onscroll=function(){tt.style.display=window.scrollY>420?'block':'none';};
 tt.onclick=function(){window.scrollTo({top:0,behavior:'smooth'});};
