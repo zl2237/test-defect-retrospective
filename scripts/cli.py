@@ -3,6 +3,7 @@
 
 模式路由：defects 有文件 → 复盘模式（parse→analyze）；无 defects 时
 requirements/test_cases/tech_designs 有文件 → 定性评审模式（AI 评审 + html 文档模式）。
+test_cases 支持 CSV/Excel/XMind。
 
 用法示例（在 Skill 目录下执行）：
   python scripts/cli.py session show
@@ -126,12 +127,12 @@ def _split_root(root):
 # scan：素材校验 + 模式路由判定（前置校验，输出缺失素材清单）
 # ---------------------------------------------------------------------------
 
-def _list_input_files(path):
+def _list_input_files(path, exts=('.csv', '.xlsx', '.xlsm', '.xls')):
     if not os.path.isdir(path):
         return []
     out = []
     for f in sorted(os.listdir(path)):
-        if f.lower().endswith(('.csv', '.xlsx', '.xlsm', '.xls')):
+        if f.lower().endswith(exts):
             out.append(f)
     return out
 
@@ -173,7 +174,8 @@ def cmd_scan(args):
     defects = _list_input_files(os.path.join(root, 'defects'))
     reqs_all = ([f for f in sorted(os.listdir(os.path.join(root, 'requirements')))]
                 if os.path.isdir(os.path.join(root, 'requirements')) else [])
-    tcs = _list_input_files(os.path.join(root, 'test_cases'))
+    tcs = _list_input_files(os.path.join(root, 'test_cases'),
+                            exts=('.csv', '.xlsx', '.xlsm', '.xls', '.xmind'))
     team_role_file = os.path.join(root, '人员角色.csv')
     # 技术方案文档（docx/md/txt 等全量文件均计入，不做扩展名过滤）
     techs_all = ([f for f in sorted(os.listdir(os.path.join(root, 'tech_designs')))]
