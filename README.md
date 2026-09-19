@@ -22,7 +22,7 @@ test-defect-retrospective/
 └── scripts/
     ├── cli.py                   # CLI 入口：session / init / scan(模式路由) / parse / analyze / html / all
     ├── normalize.py             # 值级标准化（状态/严重度/优先级/根因/时间/相似度）
-    ├── analyzer.py              # 全量指标计算（确定性，同输入必同输出）
+    ├── analyzer.py              # 全量指标计算 + XMind 用例解析（确定性，同输入必同输出）
     ├── reporter.py              # 三类产物渲染（MD+JSON）+ 仪表板/文档双模式 HTML
     ├── docx_extract.py          # docx 文档文本提取（标准库，含删除线检测）
     ├── custom_field_map.json    # 自定义平台字段映射（问卷选「其他」时生成）
@@ -36,7 +36,7 @@ test-defect-retrospective/
 
 ## 使用步骤
 
-1. **加载 Skill**：自动进入交互式问卷（5 题，支持分支追问与断点续跑），收集缺陷平台、需求托管平台、需求格式、用例来源、上一版本报告信息。
+1. **加载 Skill**：自动进入交互式问卷（4 题，每题均影响分析执行：缺陷平台→解析插件、发布时间→遗留缺陷基准、上版数据→环比、角色名单→人员效能口径；支持分支追问与断点续跑）。文件格式无需告知——docx/md/txt/CSV/Excel/XMind 解析器自动识别。
 2. **初始化目录**：确认项目名/版本号后，自动创建标准输入目录：
 
 ```
@@ -72,7 +72,7 @@ python scripts/cli.py analyze --root "项目A/v2.4.0" \
 |---|---|---|
 | defects/ | Jira/禅道/自定义平台导出（CSV 或 xlsx）；**有文件即进入复盘模式** | 可选 |
 | requirements/ | 需求文档（**docx 支持自动提取**：`python scripts/docx_extract.py "<路径>"`，删除线段落带「[删除线]」前缀用于识别废弃范围）；无 defects 时触发需求评审；如含 `需求变更记录.csv`（列：需求ID、变更内容）复盘模式可统计变更连锁缺陷 | 可选 |
-| test_cases/ | 用例文件，识别列：用例编号/标题/所属模块/关联需求/执行状态(通过/失败/阻塞/跳过/未执行)/是否回归/执行时长(分钟)/阻塞原因；无 defects 时触发用例评审 | 可选 |
+| test_cases/ | 用例文件，支持 **CSV/Excel/XMind**（.xmind：中心主题=套件、中间层级=模块路径、叶子=用例标题、优先级图标→P0~P3，兼容 XMind 8 与 Zen）；表格识别列：用例编号/标题/所属模块/关联需求/执行状态(通过/失败/阻塞/跳过/未执行)/是否回归/执行时长(分钟)/阻塞原因；无 defects 时触发用例评审；XMind 无执行状态，复盘模式执行类指标按「未执行」口径并标注 | 可选 |
 | tech_designs/ | 技术方案文档（docx/md/txt 全格式）；有文件即执行技术方案评审（复盘模式下亦可叠加） | 可选 |
 | 人员角色.csv | 团队角色名单（列：`姓名,角色`；角色取值：前端/后端/产品/测试，支持 qa/fe/be/pm 等别名）。提供后人员效能按真实角色分组：仅「测试」计入提报/验证效能、仅「前端/后端」计入修复效能，混入角色（如测试自解决缺陷）自动剔除并标注条数；未提供时按近似口径并警示 | 建议 |
 | 上一版本目录 | 同项目下按版本号语义排序自动探测，读取其 reports/ 指标 JSON 做环比 | 可选 |
@@ -124,3 +124,4 @@ python scripts/cli.py analyze --root "项目A/v2.4.0" \
 - **HTML 想包含最新 AI 定性内容**：AI 补充完 md 后重新执行 `python scripts/cli.py html --root ...` 即可。
 - **docx 提取乱码/失败**：确认文件为 .docx（非 .doc 老格式）；内嵌图片不参与提取，按缺失标注。
 - **怎么判定复盘还是评审**：看 scan 输出的 `mode` 字段（retrospective=复盘 / review=评审）。
+- **xmind 用例解析**：兼容 XMind 8（content.xml）与 XMind Zen/2020+（content.json）；detached 游离主题不参与统计；XMind 无执行状态与回归标记，相关指标按缺失/未执行口径标注。
