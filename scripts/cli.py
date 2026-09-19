@@ -356,12 +356,12 @@ def cmd_all(args):
 # ---------------------------------------------------------------------------
 
 def _md_sections(md_text):
-    """从 Markdown 报告提取 {章节标题: 正文md}。"""
+    """从 Markdown 报告提取 {章节标题: 正文md}；剔除头部「缺失素材清单」（总览页已有档案框展示）。"""
     sections = {}
     parts = md_text.split('\n## ')
     for p in parts[1:]:
         lines = p.split('\n', 1)
-        if len(lines) == 2:
+        if len(lines) == 2 and lines[0].strip() != '缺失素材清单':
             sections[lines[0].strip()] = lines[1].strip()
     return sections
 
