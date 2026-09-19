@@ -5,6 +5,9 @@
 requirements/test_cases/tech_designs 有文件 → 定性评审模式（AI 评审 + html 文档模式）。
 test_cases 支持 CSV/Excel/XMind。
 
+问卷（4 题，每题均影响分析执行）：缺陷平台→解析插件；发布时间→遗留缺陷基准；
+上版数据→环比；角色名单→人员效能口径。
+
 用法示例（在 Skill 目录下执行）：
   python scripts/cli.py session show
   python scripts/cli.py init --root "项目A/v2.4.0"
@@ -33,9 +36,10 @@ import reporter                                     # noqa: E402
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SESSION_FILE = os.path.join(SKILL_DIR, '.session.json')
 
-# 问卷题目顺序（断点续跑依据）
-SESSION_QUESTIONS = ['defect_platform', 'req_platform', 'req_format',
-                     'testcase_source', 'has_prev_report']
+# 问卷题目顺序（断点续跑依据）——每题均直接影响分析执行：
+# 平台→解析插件；发布时间→存量遗留判定；上版→环比；角色名单→人员效能口径
+SESSION_QUESTIONS = ['defect_platform', 'release_time', 'has_prev_report',
+                     'team_roles']
 # 输入目录（全部可选，按存在文件路由评审模式）
 # defects → 复盘模式；requirements/test_cases/tech_designs → 定性评审模式
 DEFECT_DIRS = ('defects', 'requirements', 'test_cases', 'tech_designs', 'reports')
