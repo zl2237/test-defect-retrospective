@@ -1,13 +1,5 @@
 # -*- coding: utf-8 -*-
-"""测试缺陷复盘 Skill —— CLI 入口。
-
-子命令：
-  session  问卷会话管理（断点续跑：show / set / reset）
-  init     初始化 {项目名}/{版本号}/ 标准输入目录
-  scan     素材校验，输出缺失素材清单（前置校验）
-  parse    解析 defects/ 导出文件 → 统一标准中间数据集
-  analyze  计算全量指标 → 生成产品/开发/测试三类产物（MD+JSON）
-  all      scan + parse + analyze 串联
+"""CLI 入口：session / init / scan / parse / analyze / html / all。
 
 用法示例（在 Skill 目录下执行）：
   python scripts/cli.py session show
@@ -15,9 +7,11 @@
   python scripts/cli.py scan --root "项目A/v2.4.0"
   python scripts/cli.py parse --root "项目A/v2.4.0"
   python scripts/cli.py analyze --root "项目A/v2.4.0" --release-time "2026-09-01 10:00"
+  python scripts/cli.py html --root "项目A/v2.4.0"   # AI 定性补充后生成汇总 HTML
 """
 import argparse
 import glob
+import io
 import json
 import os
 import sys
@@ -358,6 +352,44 @@ def cmd_all(args):
 
 
 # ---------------------------------------------------------------------------
+# html：汇总 HTML 报告（读取最新指标 JSON + 三份最新 md，含 AI 定性段落）
+# ---------------------------------------------------------------------------
+
+def _md_sections(md_text):
+    """从 Markdown 报告提取 {章节标题: 正文md}。"""
+    sections = {}
+    parts = md_text.split('\n## ')
+    for p in parts[1:]:
+        lines = p.split('\n', 1)
+        if len(lines) == 2:
+            sections[lines[0].strip()] = lines[1].strip()
+    return sections
+
+
+def cmd_html(args):
+    root = args.root.rstrip('/\\')
+    reports_dir = os.path.join(root, 'reports')
+    metrics_file = getattr(args, 'metrics_file', None) or _latest(
+        reports_dir, '复盘数据_指标全量_')
+    if not metrics_file or not os.path.exists(metrics_file):
+        raise SystemExit('未找到指标全量 JSON，请先执行 analyze')
+    metrics = _load_json(metrics_file)
+
+    sections_by_cat = {}
+    for cat in ('产品', '开发', '测试'):
+        mds = sorted(glob.glob(os.path.join(reports_dir, '复盘报告_%s_*.md' % cat)))
+        if mds:
+            with io.open(mds[-1], 'r', encoding='utf-8') as f:
+                sections_by_cat[cat] = {t: reporter.md_block_to_html(b)
+                                        for t, b in _md_sections(f.read()).items()}
+        else:
+            sections_by_cat[cat] = {}
+    out = reporter.write_html(metrics, sections_by_cat, reports_dir)
+    _print_json({'output': out, 'source_metrics': os.path.basename(metrics_file)})
+    return out
+
+
+# ---------------------------------------------------------------------------
 # 入口
 # ---------------------------------------------------------------------------
 
@@ -401,6 +433,11 @@ def main():
     sp.add_argument('--platform', default='auto',
                     choices=['auto', 'jira', 'zentao', 'custom'])
     sp.set_defaults(func=cmd_all)
+
+    sp = sub.add_parser('html', help='生成汇总 HTML 报告（合并最新指标 JSON 与 md 定性内容）')
+    sp.add_argument('--root', required=True)
+    sp.add_argument('--metrics-file', help='指定指标全量 JSON（默认取最新）')
+    sp.set_defaults(func=cmd_html)
 
     args = ap.parse_args()
     args.func(args)
