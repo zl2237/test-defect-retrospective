@@ -2,7 +2,7 @@
 
 ## 项目目标
 
-可复用 AI Skill + 本地预置 Python 解析脚本，面向**版本测试缺陷复盘**场景：解析 Jira / 禅道缺陷导出文件，按统一口径计算全量分析指标，自动产出**产品 / 开发 / 测试**三类复盘报告（Markdown + JSON 双格式）。纯文件处理：无 Web 平台、无服务端、无数据库。
+可复用 AI Skill + 本地预置 Python 解析脚本，面向**版本测试缺陷复盘**场景：解析 Jira / 禅道缺陷导出文件，按统一口径计算全量分析指标，自动产出**产品 / 开发 / 测试**三类复盘报告（Markdown + JSON + 汇总 HTML）。纯文件处理：无 Web 平台、无服务端、无数据库。
 
 - 环境要求：Python 3.8+；读取 Excel（.xlsx）需 `pip install openpyxl`（CSV 无需依赖）。
 - 完整指标口径、产物章节模板、交互流程见 `SKILL.md`。
@@ -15,10 +15,10 @@ test-defect-retrospective/
 ├── README.md                    # 本文件
 ├── .session.json                # 问卷会话状态（自动生成，支持断点续跑）
 └── scripts/
-    ├── cli.py                   # CLI 入口：session / init / scan / parse / analyze / all
+    ├── cli.py                   # CLI 入口：session / init / scan / parse / analyze / html / all
     ├── normalize.py             # 值级标准化（状态/严重度/优先级/根因/时间/相似度）
     ├── analyzer.py              # 全量指标计算（确定性，同输入必同输出）
-    ├── reporter.py              # 三类产物渲染（MD+JSON，时间戳幂等）
+    ├── reporter.py              # 三类产物渲染（MD+JSON）与单文件汇总 HTML
     ├── custom_field_map.json    # 自定义平台字段映射（问卷选「其他」时生成）
     └── parsers/                 # 插件化解析器（新增平台只加插件，不改主逻辑）
         ├── __init__.py          # 注册表 + 平台自动探测
@@ -51,9 +51,10 @@ python scripts/cli.py scan   --root "项目A/v2.4.0"                 # 素材校
 python scripts/cli.py parse  --root "项目A/v2.4.0"                 # 解析→标准中间数据集
 python scripts/cli.py analyze --root "项目A/v2.4.0" \
        --release-time "2026-09-01 10:00"                          # 全量指标+三类产物
+python scripts/cli.py html   --root "项目A/v2.4.0"                 # 汇总 HTML（AI 定性补充后）
 ```
 
-5. **AI 定性补充**：脚本产出量化数据后，Skill 对标注【AI分析】的章节补充定性内容（语言风格分析、需求质量四维评估、漏测风险、自动化分层建议、改进项校验等）。
+5. **AI 定性补充**：脚本产出量化数据后，Skill 对标注【AI分析】的章节补充定性内容（语言风格分析、需求质量四维评估、漏测风险、自动化分层建议、改进项校验等），再执行 `html` 生成含定性内容的汇总报告。
 
 - **最小输入集**：仅 `defects/` 即可产出开发、测试类核心产物（需求类章节标注缺失）。
 - **幂等运行**：报告文件带时间戳，重复运行不覆盖历史、不修改任何原始输入文件。
@@ -74,6 +75,7 @@ python scripts/cli.py analyze --root "项目A/v2.4.0" \
 - `复盘报告_开发_{ts}.md/.json` —— 7 个固定章节（大盘、根因、偶现清单、修复时效分层、回弹率、重复缺陷根因、流程建议）
 - `复盘报告_测试_{ts}.md/.json` —— 14 个固定章节（提报效能、验证率、环比、改进项校验、覆盖率、阻塞、回归、漏测风险、自动化清单等）
 - `复盘数据_指标全量_{ts}.json` —— 全量指标结构化数据（供其他工具调用与下版本环比）
+- `复盘报告_汇总_{ts}.html` —— **单文件自包含 HTML 汇总报告**（`python scripts/cli.py html --root ...`）：总览指标卡 + 严重程度环形图 + 优先级/模块/耗时条形图 + 三类产物全部章节（含 AI 分析卡片），零外部依赖，可离线打开、下载、迁移分享，支持打印分页
 
 数据缺失的章节统一标注：`⚠️ 【数据缺失】缺少XX文件/字段，该项暂无法分析`。
 
@@ -108,3 +110,4 @@ python scripts/cli.py analyze --root "项目A/v2.4.0" \
 - **Excel 读取失败**：安装 `pip install openpyxl`，或改用 CSV 导出。
 - **表头未被识别**：核对导出字段名与映射表；Jira/禅道自定义字段请走 custom 映射。
 - **环比无数据**：确认上一版本目录的 reports/ 下存在 `复盘数据_指标全量_*.json`。
+- **HTML 想包含最新 AI 定性内容**：AI 补充完 md 后重新执行 `python scripts/cli.py html --root ...` 即可。
