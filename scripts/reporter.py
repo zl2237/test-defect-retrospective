@@ -6,10 +6,12 @@
 - 双格式输出：Markdown 可读报告 + JSON 结构化数据（+汇总 HTML，零外部依赖）；
 - 文件名带时间戳，幂等运行不覆盖历史报告；
 - 数据缺失的章节末尾统一标注：⚠️ 【数据缺失】缺少XX文件/字段，该项暂无法分析；
-- AI 定性内容以「【AI分析】」占位标记预留，由 Skill 侧追加补充。
+- AI 定性内容以「【AI分析】」占位标记预留，由 Skill 侧追加补充；
+- 纯需求评审等单文档产物用 render_doc_html 渲染为档案风文档 HTML。
 """
 import json
 import os
+import re
 import time
 
 MISSING_MARK = '⚠️ 【数据缺失】'
@@ -378,7 +380,6 @@ def write_reports(metrics, reports_dir):
 
 # ---------------------------------------------------------------------------
 # 汇总 HTML 报告 —— 「工业质检档案」美学（单文件，零外部依赖，可离线分享）
-# 设计语言：检验单纸面 / 档案编号与条码 / 等宽仪表读数 / 帕累托 / 红章批注
 # ---------------------------------------------------------------------------
 
 _C = {'ink': '#1b1e22', 'line': '#23272b', 'hair': '#c9c2b2', 'paper': '#f4f0e6',
@@ -553,15 +554,16 @@ def _esc(s):
 
 
 def _md_inline(s):
-    """行内 Markdown → HTML（加粗渲染为记号笔高亮）。"""
+    """行内 Markdown → HTML（加粗=记号笔高亮；*斜体*）。"""
     s = _esc(s)
     parts = s.split('**')
-    return ''.join(p if i % 2 == 0 else '<strong>%s</strong>' % p
-                   for i, p in enumerate(parts))
+    s = ''.join(p if i % 2 == 0 else '<strong>%s</strong>' % p
+                for i, p in enumerate(parts))
+    return re.sub(r'\*([^*\n]+)\*', r'<em>\1</em>', s)
 
 
 def md_block_to_html(md):
-    """轻量 Markdown → HTML（表格/引用/列表/标题/段落）。"""
+    """轻量 Markdown → HTML（表格/引用/列表/标题/分割线/段落）。"""
     lines = str(md or '').split('\n')
     html, i, para = [], 0, []
 
@@ -574,6 +576,11 @@ def md_block_to_html(md):
         line = lines[i].rstrip()
         if not line.strip():
             flush_para(); i += 1; continue
+        # 水平分割线 --- / ***
+        if re.fullmatch(r'\s*([-*_])\s*(\1\s*){2,}', line):
+            flush_para()
+            html.append('<hr class="rule">')
+            i += 1; continue
         if line.lstrip().startswith('|') and i + 1 < len(lines) and \
                 set(lines[i + 1].replace('|', '').replace('-', '').strip()) <= set(': '):
             flush_para()
@@ -747,7 +754,6 @@ def _lamp_class(v, ok_when, warn_when, higher_better=True):
 
 def render_html(metrics, sections_by_cat):
     """渲染汇总 HTML（工业质检档案风，单文件自包含）。"""
-    import re as _re
     meta = metrics['meta']
     ov, ps, sc = metrics['overview'], metrics['personnel'], metrics['summary_core']
 
@@ -811,7 +817,7 @@ def render_html(metrics, sections_by_cat):
                    '<ul><li>请先执行 analyze</li></ul></div>'
         out = []
         for title, body in secs.items():
-            m = _re.match(r'^([一二三四五六七八九十]+)、(.*)$', title)
+            m = re.match(r'^([一二三四五六七八九十]+)、(.*)$', title)
             no, txt = (m.group(1), m.group(2)) if m else ('§', title)
             out.append('<div class="sec-head"><span class="no">%s</span><h2>%s</h2>'
                        '<span class="tag">%s</span></div>%s'
@@ -832,7 +838,7 @@ def render_html(metrics, sections_by_cat):
     else:
         stamp = ('<div class="stamp" style="color:%s">%d 条未闭环</div>'
                  % (_C['red'], unclosed))
-    arch_no = 'TDR-' + _re.sub(r'[^0-9]', '', meta['generated_at'])
+    arch_no = 'TDR-' + re.sub(r'[^0-9]', '', meta['generated_at'])
 
     payload = json.dumps(metrics, ensure_ascii=False).replace('</', '<\\/')
 
@@ -919,4 +925,102 @@ def write_html(metrics, sections_by_cat, reports_dir):
     path = _unique_path(os.path.join(reports_dir, '复盘报告_汇总_%s.html' % _ts()))
     with open(path, 'w', encoding='utf-8') as f:
         f.write(render_html(metrics, sections_by_cat))
+    return path
+
+
+# ---------------------------------------------------------------------------
+# 文档式 HTML（纯需求评审等单文档产物的「质检档案」渲染，无指标依赖）
+# ---------------------------------------------------------------------------
+
+def render_doc_html(md_text, stamp='需求评审', stamp_color=None):
+    """将单份 Markdown 报告渲染为档案风 HTML：
+    首行「# 标题」→ 大标题；开头连续「> 」行 → 档案元信息；其余按章节渲染。"""
+    lines = md_text.split('\n')
+    title, meta_lines, body_start = '', [], 0
+    for idx, ln in enumerate(lines):
+        s = ln.strip()
+        if idx == 0 and s.startswith('# '):
+            title = s[2:].strip()
+            body_start = idx + 1
+            continue
+        if idx >= body_start and s.startswith('>'):
+            meta_lines.append(s.lstrip('> ').strip())
+            body_start = idx + 1
+        elif idx >= body_start and not s:
+            continue
+        else:
+            break
+    body = '\n'.join(lines[body_start:])
+
+    # 章节化：## 标题 → 方章章节头
+    out, sec_no = [], 0
+    for part in body.split('\n## '):
+        if not part.strip():
+            continue
+        chunk = part.split('\n', 1)
+        head = chunk[0].strip()
+        rest = chunk[1] if len(chunk) > 1 else ''
+        m = re.match(r'^([一二三四五六七八九十]+)、(.*)$', head)
+        if m or (out and not head.startswith('#')):
+            sec_no += 1
+            no = m.group(1) if m else str(sec_no)
+            txt = m.group(2) if m else head
+            out.append('<div class="sec-head"><span class="no">%s</span><h2>%s</h2>'
+                       '<span class="tag">DOC REPORT</span></div>%s'
+                       % (no, _esc(txt), md_block_to_html(rest)))
+        else:
+            out.append(md_block_to_html(part))
+    content = '\n'.join(out)
+
+    stamp_html = ('<div class="stamp" style="color:%s">%s</div>'
+                  % (stamp_color or _C['navy'], _esc(stamp)))
+    arch_no = 'TDR-' + time.strftime('%Y%m%d%H%M%S')
+    meta_html = ''.join('<span>%s</span>' % _esc(x) for x in meta_lines if x)
+    return '''<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>%(title)s</title>
+<style>%(css)s
+hr.rule{border:0;border-top:3px double var(--line);margin:22px 0}
+.doc-meta span{display:block}
+</style>
+</head>
+<body>
+<div class="sheet">
+  <header class="masthead">
+    <div class="over">QA DOSSIER · 检验档案 · 仅限内部流传</div>
+    <h1>%(title)s<small>DOCUMENT REVIEW SHEET</small></h1>
+    <div class="doc-meta">%(meta)s</div>
+    <div class="barcode"><div class="bars"></div><div class="no">%(arch)s</div></div>
+    %(stamp)s
+  </header>
+  <main style="padding-top:6px">%(content)s</main>
+  <footer class="colophon">
+    <span>ISSUED BY test-defect-retrospective SKILL</span>
+    <span>自包含单文件 · 可离线查阅与转递</span>
+  </footer>
+</div>
+<button id="toTop" title="返回顶部">▲</button>
+<script>
+var tt=document.getElementById('toTop');
+window.onscroll=function(){tt.style.display=window.scrollY>420?'block':'none';};
+tt.onclick=function(){window.scrollTo({top:0,behavior:'smooth'});};
+</script>
+</body>
+</html>''' % {'title': _esc(title or '文档评审'), 'css': _HTML_CSS,
+               'meta': meta_html, 'arch': arch_no, 'stamp': stamp_html,
+               'content': content}
+
+
+def write_doc_html(md_path, reports_dir, stamp='需求评审', stamp_color=None):
+    """读取 Markdown 报告并输出档案风 HTML（时间戳幂等），返回文件路径。"""
+    os.makedirs(reports_dir, exist_ok=True)
+    with open(md_path, 'r', encoding='utf-8') as f:
+        md_text = f.read()
+    base = re.sub(r'\.md$', '', os.path.basename(md_path))
+    path = _unique_path(os.path.join(reports_dir, '%s_%s.html' % (base, _ts())))
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(render_doc_html(md_text, stamp=stamp, stamp_color=stamp_color))
     return path
