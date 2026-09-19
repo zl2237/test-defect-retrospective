@@ -7,7 +7,7 @@
   python scripts/cli.py scan --root "项目A/v2.4.0"
   python scripts/cli.py parse --root "项目A/v2.4.0"
   python scripts/cli.py analyze --root "项目A/v2.4.0" --release-time "2026-09-01 10:00"
-  python scripts/cli.py html --root "项目A/v2.4.0"   # AI 定性补充后生成汇总 HTML
+  python scripts/cli.py html --root "项目A/v2.4.0"   # 仪表板模式（有指标）/ 文档模式（纯需求评审）
 """
 import argparse
 import glob
@@ -352,7 +352,7 @@ def cmd_all(args):
 
 
 # ---------------------------------------------------------------------------
-# html：汇总 HTML 报告（读取最新指标 JSON + 三份最新 md，含 AI 定性段落）
+# html：汇总 HTML（仪表板模式 / 文档模式自动识别）
 # ---------------------------------------------------------------------------
 
 def _md_sections(md_text):
@@ -367,12 +367,25 @@ def _md_sections(md_text):
 
 
 def cmd_html(args):
+    import io
     root = args.root.rstrip('/\\')
     reports_dir = os.path.join(root, 'reports')
     metrics_file = getattr(args, 'metrics_file', None) or _latest(
         reports_dir, '复盘数据_指标全量_')
+    # 文档模式：--doc 指定 md，或无指标 JSON 时自动查找最新需求评审报告
+    doc_file = getattr(args, 'doc', None)
+    if doc_file is None and not (metrics_file and os.path.exists(metrics_file)):
+        docs = sorted(glob.glob(os.path.join(reports_dir, '需求评审报告_*.md')))
+        doc_file = docs[-1] if docs else None
+    if doc_file:
+        if not os.path.exists(doc_file):
+            raise SystemExit('未找到文档: %s' % doc_file)
+        out = reporter.write_doc_html(doc_file, reports_dir)
+        _print_json({'output': out, 'mode': 'doc',
+                     'source_doc': os.path.basename(doc_file)})
+        return out
     if not metrics_file or not os.path.exists(metrics_file):
-        raise SystemExit('未找到指标全量 JSON，请先执行 analyze')
+        raise SystemExit('未找到指标全量 JSON（请先执行 analyze）或需求评审报告 md')
     metrics = _load_json(metrics_file)
 
     sections_by_cat = {}
@@ -385,7 +398,8 @@ def cmd_html(args):
         else:
             sections_by_cat[cat] = {}
     out = reporter.write_html(metrics, sections_by_cat, reports_dir)
-    _print_json({'output': out, 'source_metrics': os.path.basename(metrics_file)})
+    _print_json({'output': out, 'mode': 'dashboard',
+                 'source_metrics': os.path.basename(metrics_file)})
     return out
 
 
@@ -434,9 +448,10 @@ def main():
                     choices=['auto', 'jira', 'zentao', 'custom'])
     sp.set_defaults(func=cmd_all)
 
-    sp = sub.add_parser('html', help='生成汇总 HTML 报告（合并最新指标 JSON 与 md 定性内容）')
+    sp = sub.add_parser('html', help='生成汇总 HTML（指标仪表板模式 / 纯需求评审文档模式自动识别）')
     sp.add_argument('--root', required=True)
     sp.add_argument('--metrics-file', help='指定指标全量 JSON（默认取最新）')
+    sp.add_argument('--doc', help='指定 Markdown 报告渲染为档案风 HTML（文档模式）')
     sp.set_defaults(func=cmd_html)
 
     args = ap.parse_args()
