@@ -1,6 +1,6 @@
 ---
 name: test-defect-retrospective
-description: 测试缺陷复盘工具包：交互式问卷收集环境信息，解析Jira/禅道缺陷导出文件，自动产出产品/开发/测试三类复盘报告（Markdown+JSON）。当用户要求做版本缺陷复盘、测试总结、缺陷分析或测试效能分析时调用。
+description: 测试缺陷复盘工具包：交互式问卷收集环境信息，解析Jira/禅道缺陷导出文件，自动产出产品/开发/测试三类复盘报告（Markdown+JSON+汇总HTML）。当用户要求做版本缺陷复盘、测试总结、缺陷分析或测试效能分析时调用。
 ---
 
 # 测试缺陷复盘 Skill
@@ -100,6 +100,19 @@ python scripts/cli.py analyze --root "{项目名}/{版本号}" [--release-time "
 - `reports/复盘报告_测试_{ts}.md` / `复盘报告_测试_{ts}.json`
 - `reports/复盘数据_指标全量_{ts}.json`（全量指标结构化数据，供工具调用与下版本环比）
 
+### 第 3.5 步：汇总 HTML 报告（AI 定性补充完成后执行）
+
+```
+python scripts/cli.py html --root "{项目名}/{版本号}"
+```
+
+生成 `reports/复盘报告_汇总_{ts}.html`：
+- **单文件自包含**（内嵌 CSS/JS/SVG 图表，零外部依赖），可离线打开、下载、迁移分享
+- 读取最新指标全量 JSON + 三份最新 md 报告（**含已追加的 AI 定性段落**），合并渲染
+- 总览 Tab：核心指标卡片、严重程度环形图、优先级/模块 TOP10/生命周期耗时条形图、缺失清单
+- 开发/测试/产品 Tab：对应全部固定章节（量化表格 + 绿色【AI分析】卡片）
+- 内嵌全量指标 JSON（`<script type="application/json">`）供其他工具取数；支持打印（Ctrl+P 自动展开全部 Tab 分页）
+
 版本环比自动匹配：未指定 `--prev-root` 时，在同项目目录下按**版本号语义排序**自动取上一版本，读取其 reports/ 下最新指标 JSON 与报告。
 
 ### 第 4 步：AI 定性补充（只追加，不删改脚本产出的量化表格）
@@ -116,11 +129,11 @@ python scripts/cli.py analyze --root "{项目名}/{版本号}" [--release-time "
 8. 可封装成新 Skill 的重复性工作清单
 9. 版本环比定性结论：变化点 / 进步点 / 核心短板；上一轮改进项落地效果校验（阅读上一版本报告原文逐项核对）
 
-### 第 5 步：复核
+### 第 5 步：复核与汇总
 
 - 确认无任何编造数据与结论（缺失即标注，不推测填充）。
 - 确认所有无法分析项已按第六节规则集中标注。
-- 向用户报告产物文件路径清单。
+- 执行第 3.5 步生成汇总 HTML，向用户报告产物文件路径清单。
 
 ## 三、全量分析指标口径（一项不缺；同输入必同输出）
 
@@ -205,7 +218,7 @@ python scripts/cli.py analyze --root "{项目名}/{版本号}" [--release-time "
 
 ## 四、产物归类输出（固定 3 大类，不新增板块，章节不得增减）
 
-所有产物双格式输出：① Markdown 可读报告 ② JSON 结构化数据。章节结构固定如下，脚本生成量化表格，AI 仅在章节内追加定性内容。
+所有产物双格式输出：① Markdown 可读报告 ② JSON 结构化数据（③ 汇总 HTML）。章节结构固定如下，脚本生成量化表格，AI 仅在章节内追加定性内容。
 
 ### 【产物：产品】复盘报告_产品_{ts}.md
 
@@ -271,7 +284,7 @@ python scripts/cli.py analyze --root "{项目名}/{版本号}" [--release-time "
 
 ## 六、硬性约束
 
-- 禁止开发任何 Web 平台、服务端、数据库相关代码。
+- 禁止开发任何 Web 平台、服务端、数据库相关代码（HTML 为纯静态单文件报告，不属 Web 平台）。
 - Skill 加载必须自动触发交互式提问流程。
 - 严格遵守 `{项目名}/{版本号}/` 的输入路径规范。
 - 所有量化指标口径统一（见第三节），同输入必同输出。
@@ -318,6 +331,7 @@ python scripts/cli.py scan   --root "{项目名}/{版本号}"
 python scripts/cli.py parse  --root "{项目名}/{版本号}" [--platform auto]
 python scripts/cli.py analyze --root "{项目名}/{版本号}" [--release-time "YYYY-MM-DD HH:MM"] [--prev-root PATH]
 python scripts/cli.py all    --root "{项目名}/{版本号}"   # scan+parse+analyze 串联
+python scripts/cli.py html   --root "{项目名}/{版本号}"   # 汇总 HTML（AI 定性补充后执行）
 ```
 
 ## 附录C：自定义平台映射文件（Q1 选「其他」时由 AI 生成）
