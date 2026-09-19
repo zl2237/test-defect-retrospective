@@ -207,19 +207,21 @@ def build_test(m):
     auto, risk, cmp = m['automation'], m['risk_scan'], m['compare']
     sec = {}
 
-    tester_rows = [{'测试人员': t['测试人员'], '角色': t.get('角色', '-'),
+    # 第一章（提报维度）与第二章（验证维度）列拆分，避免两章渲染同一张全列表格
+    report_rows = [{'测试人员': t['测试人员'], '角色': t.get('角色', '-'),
                     '提交Bug数': t['提交Bug数'],
-                    '个人占比(%)': t['个人占比(%)'],
+                    '个人占比(%)': t['个人占比(%)']} for t in ps['testers']]
+    verify_rows = [{'测试人员': t['测试人员'], '角色': t.get('角色', '-'),
+                    '验证总数': t['验证总数'],
                     '首次验证通过率(%)': t['首次验证通过率(%)'],
                     '驳回重修复率(%)': t['驳回重修复率(%)'],
-                    '平均验证时长(小时)': t['平均验证时长(小时)'],
-                    '重复上报Bug率(%)': t['重复上报Bug率(%)']} for t in ps['testers']]
-    sec['一、测试人员提报效能全量指标'] = _table(tester_rows)
+                    '平均验证时长(小时)': t['平均验证时长(小时)']} for t in ps['testers']]
+    sec['一、测试人员提报效能全量指标'] = _table(report_rows)
 
     sec['二、Bug验证通过率与驳回率统计'] = (
-        _table(tester_rows) + '\n\n' + _ai_placeholder(
+        _table(verify_rows) + '\n\n' + _ai_placeholder(
             '对各测试人员 titles_sample 标题采样做 Bug 描述语言风格分析与改良建议')
-        if tester_rows else _missing_line('提报人字段'))
+        if verify_rows else _missing_line('提报人字段'))
 
     if cmp:
         sec['三、版本环比全量分析'] = (
