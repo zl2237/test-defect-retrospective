@@ -7,6 +7,7 @@
 3. 禁止编造 —— 缺失字段一律 None/空，不做推测填充。
 口径与 SKILL.md 第三节保持一致，修改口径需两处同步。
 """
+import json
 import math
 import os
 import re
@@ -25,6 +26,7 @@ TC_FIELD_MAP = {
     'module': ['所属模块', '模块', '功能模块', '一级模块', '系统模块'],
     'requirement_id': ['关联需求', '需求ID', '需求编号', '关联需求ID', 'Story', '需求'],
     'status': ['执行状态', '执行结果', '结果', '状态', '最近执行结果', '测试结果'],
+    'priority': ['优先级', '级别', 'Priority'],
     'is_regression': ['是否回归', '回归', '回归用例', '用例类型'],
     'duration_min': ['执行时长', '执行时长(分钟)', '耗时', '耗时(分钟)', '执行时长（分钟）'],
     'block_reason': ['阻塞原因', '失败原因', '备注', '备注说明'],
@@ -120,7 +122,7 @@ def _bug_brief(b):
 
 
 # ---------------------------------------------------------------------------
-# 测试用例解析
+# 测试用例解析（CSV / Excel / XMind）
 # ---------------------------------------------------------------------------
 
 def _tc_status_std(raw):
@@ -137,17 +139,133 @@ def _tc_status_std(raw):
     return '未执行'
 
 
+# XMind 优先级图标 → 标准优先级（priority-1 最高）
+_XMIND_PRI = {'priority-1': 'P0', 'priority-2': 'P1', 'priority-3': 'P2',
+              'priority-4': 'P3', 'priority-5': 'P3', 'priority-6': 'P3'}
+
+
+def _xmind_priority_zen(topic):
+    """XMind Zen/2020+（content.json）主题的优先级标记。"""
+    for mk in topic.get('markers') or []:
+        mid = str(mk.get('markerId') or mk.get('id') or '')
+        if mid in _XMIND_PRI:
+            return _XMIND_PRI[mid]
+    return None
+
+
+def _xmind_tree_zen(topic):
+    """XMind Zen JSON 主题 → 统一树节点 {title, priority, children}。"""
+    return {
+        'title': str(topic.get('title') or '').strip(),
+        'priority': _xmind_priority_zen(topic),
+        'children': [_xmind_tree_zen(c)
+                     for c in (topic.get('children') or {}).get('attached') or []],
+    }
+
+
+def _xmind_tree_xml(xml_text):
+    """XMind 8（content.xml）→ 统一树节点；仅取 attached 子主题。"""
+    import xml.etree.ElementTree as ET
+    root = ET.fromstring(xml_text)
+
+    def parse_topic(el):
+        title = ''
+        for t in el.findall('./title'):
+            title = (t.text or '').strip()
+            break
+        pri = None
+        for ref in el.findall('./marker-refs/marker-ref'):
+            mid = ref.get('marker-id', '')
+            if mid in _XMIND_PRI:
+                pri = _XMIND_PRI[mid]
+                break
+        children = []
+        for topics in el.findall('./children/topics'):
+            if (topics.get('type') or 'attached') == 'detached':
+                continue
+            for child in topics.findall('./topic'):
+                children.append(parse_topic(child))
+        return {'title': title, 'priority': pri, 'children': children}
+
+    # 根 topic：content.xml 结构可能带 sheet 包裹，取第一个含 title 的 topic
+    first = root.find('.//topic')
+    if first is None:
+        return {'title': '', 'priority': None, 'children': []}
+    return parse_topic(first)
+
+
+def parse_xmind(path):
+    """解析 .xmind（兼容 XMind8 content.xml 与 Zen content.json）→ 用例 dict 列表。
+
+    约定：中心主题=项目/套件名（不计入模块）；中间层级=模块路径；叶子节点=用例标题；
+    优先级图标 → P0~P3；XMind 不含执行状态，status_std 统一记「未执行」。
+    """
+    import zipfile
+    with zipfile.ZipFile(path) as z:
+        names = z.namelist()
+        if 'content.json' in names:
+            data = json.loads(z.read('content.json').decode('utf-8'))
+            topic = data[0].get('rootTopic', {}) if isinstance(data, list) \
+                else data.get('rootTopic', {})
+            tree = _xmind_tree_zen(topic)
+        elif 'content.xml' in names:
+            tree = _xmind_tree_xml(z.read('content.xml').decode('utf-8'))
+        else:
+            raise RuntimeError('无法识别的 xmind 结构（缺少 content.xml/content.json）: %s'
+                               % path)
+
+    leaves = []
+
+    def walk(node, path):
+        np = path + [node['title']] if node['title'] else path
+        if not node['children']:
+            if node['title']:
+                leaves.append({'path': np, 'title': node['title'],
+                               'priority': node.get('priority')})
+        else:
+            for c in node['children']:
+                walk(c, np)
+
+    walk(tree, [])
+    cases = []
+    for i, leaf in enumerate(leaves, start=1):
+        # 模块 = 中心主题之后、叶子之前的路径（叶子直挂中心主题时用中心主题名）
+        module = '/'.join(leaf['path'][1:-1]) or (leaf['path'][0] or '未分组')
+        cases.append({
+            'case_id': 'XM-%03d' % i,
+            'title': leaf['title'],
+            'module': module,
+            'priority': leaf['priority'],
+            'requirement_id': None,
+            'status': None,
+            'status_std': '未执行',
+            'is_regression': None,
+            'duration_min': None,
+            'block_reason': None,
+            '_from_xmind': True,
+            '_source_file': os.path.basename(path),
+            '_source_row': i,
+        })
+    return cases
+
+
 def parse_testcases(testcase_dir):
-    """解析 test_cases/ 全部文件 → (cases, warnings)。"""
+    """解析 test_cases/ 全部文件（CSV/Excel/XMind）→ (cases, warnings)。"""
     cases, warnings = [], []
     if not os.path.isdir(testcase_dir):
         return None, ['test_cases/ 目录不存在']
     files = sorted(f for f in os.listdir(testcase_dir)
-                   if f.lower().endswith(('.csv', '.xlsx', '.xlsm')))
+                   if f.lower().endswith(('.csv', '.xlsx', '.xlsm', '.xmind')))
     if not files:
-        return None, ['test_cases/ 目录下无 CSV/Excel 文件']
+        return None, ['test_cases/ 目录下无 CSV/Excel/XMind 文件']
     for fn in files:
         path = os.path.join(testcase_dir, fn)
+        if fn.lower().endswith('.xmind'):
+            try:
+                cases.extend(parse_xmind(path))
+            except (RuntimeError, ValueError, KeyError) as e:
+                warnings.append('文件 %s 解析失败: %s' % (fn, e))
+            continue
         try:
             headers, rows = read_table(path)
         except RuntimeError as e:
@@ -663,6 +781,11 @@ class Analyzer:
             self.missing.append('缺少 test_cases/ 测试用例文件，用例执行与覆盖率指标无法分析')
             return None
         cases = self.cases
+        xmind_n = sum(1 for c in cases if c.get('_from_xmind'))
+        if xmind_n:
+            self.missing.append(
+                'test_cases 含 %d 条 XMind 用例（无执行状态字段），执行状态分布与'
+                '执行覆盖率按「未执行」口径统计，执行类指标参考意义有限' % xmind_n)
         total = len(cases)
         counter = defaultdict(int)
         for c in cases:
