@@ -156,7 +156,7 @@ def histories(iss):
 
 def derive_from_changelog(iss):
     """从 changelog 派生：分配时间 / 解决人 / 关闭时间 / 关闭人(验证人) / 重开次数。"""
-    assigned_at = resolver = closed_at = verifier = None
+    assigned_at = resolver = closed_at = verifier = resolved_at = None
     reopen_count = 0
     prev_bucket = None
     for h in sorted(histories(iss), key=lambda x: x.get('created', '')):
@@ -169,13 +169,14 @@ def derive_from_changelog(iss):
                 to_b = status_bucket(it.get('toString'))
                 if to_b in ('resolved', 'closed') and resolver is None:
                     resolver = author                  # 首次解决人
+                    resolved_at = ts                   # 首次进入已解决/关闭类的时间
                 if to_b == 'closed':
                     closed_at, verifier = ts, author   # 最后一次关闭（人/时间）
                 # 回退：已解决/关闭 → 打开/处理中 记一次重开
                 if prev_bucket in ('resolved', 'closed') and to_b in ('open', 'in_progress'):
                     reopen_count += 1
                 prev_bucket = to_b
-    return {'assigned_at': assigned_at, 'resolver': resolver,
+    return {'assigned_at': assigned_at, 'resolver': resolver, 'resolved_at': resolved_at,
             'closed_at': closed_at, 'verifier': verifier, 'reopen_count': reopen_count}
 
 
@@ -235,7 +236,7 @@ def build_rows(issues, args):
             '验证人': der['verifier'] or uname(f.get('reporter')),
             '创建时间': f.get('created'),
             '分配时间': der['assigned_at'],
-            '解决时间': f.get('resolutiondate'),
+            '解决时间': f.get('resolutiondate') or der['resolved_at'],
             '关闭时间': der['closed_at'],
             '解决结果': (f.get('resolution', {}) or {}).get('name', ''),
             '重开次数': der['reopen_count'],
