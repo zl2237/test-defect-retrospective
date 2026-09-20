@@ -109,6 +109,7 @@ def _bug_brief(b):
         'title': b.get('title'),
         'module': b.get('module') or '未知',
         'severity': b.get('severity_std'),
+        'status': b.get('status'),
         'status_group': b.get('status_group'),
         'reporter': b.get('reporter'),
         'assignee': b.get('assignee'),

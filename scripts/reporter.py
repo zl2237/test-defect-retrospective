@@ -56,7 +56,7 @@ def _ai_placeholder(hint):
 def _brief_table(items, limit=200):
     """缺陷清单摘要表。"""
     rows = [{'编号': i.get('bug_id'), '标题': i.get('title'), '模块': i.get('module'),
-             '严重程度': i.get('severity'), '状态': i.get('status_group'),
+             '严重程度': i.get('severity'), '状态': i.get('status') or i.get('status_group'),
              '提报人': i.get('reporter')}
             for i in (items or [])[:limit]]
     return _table(rows)

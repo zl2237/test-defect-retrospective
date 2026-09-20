@@ -16,11 +16,12 @@ _STATUS_GROUPS = [
     ('closed', ['closed', 'close', 'done', '已关闭', '关闭', '已完成', '已完结',
                 '已验证', '已验证通过', 'verified', '已验收']),
     ('resolved', ['resolved', 'resolve', 'fixed', '已解决', '解决', '已修复',
-                  '修复完成', '待验证', '待测试验证', 'ready for qa', 'in qa']),
+                  '修复完成', '待验证', '待测试验证', '验证中', 'ready for qa', 'in qa']),
     ('in_progress', ['in progress', 'processing', '处理中', '进行中', '开发中',
                      '修复中', 'investigating', 'reopened', '重新打开', '重开']),
     ('open', ['open', 'to do', 'todo', 'backlog', 'new', 'created', '待办',
-              '新建', '打开', '激活', 'active', '待处理', '未处理', '待指派']),
+              '新建', '打开', '激活', 'active', '待处理', '未处理', '待指派',
+              '待确认', '已延期']),   # 自定义工作流：初始/打回态；延期挂起态
 ]
 
 # 严重程度：致命/严重/一般/轻微/建议（禅道数字 1-4 → 致命/严重/一般/轻微）
@@ -45,7 +46,8 @@ INVALID_RESOLUTION_STD = ['重复', '设计如此', '无法重现', '无效', '�
 _RESOLUTION_STD = {
     '已修复': ['fixed', '已修复', '修复', '解决', 'done', '已解决', 'complete'],
     '重复': ['duplicate', '重复', '重复缺陷', '重复提交', 'dup'],
-    '设计如此': ['by design', "won't fix", 'wont fix', 'wontfix', '设计如此', '不予解决', '不需要修复'],
+    '设计如此': ['by design', "won't fix", 'wont fix', 'wontfix', '设计如此', '不予解决',
+                '不需要修复', '被否决', '已否决'],   # 自定义工作流的否决解决结果
     '无法重现': ['cannot reproduce', 'can not reproduce', '无法重现', '无法复现', '不能重现'],
     '无效': ['invalid', '无效', 'not a bug', '误报'],
     '转需求': ['转需求', 'requirement', '转为需求'],
