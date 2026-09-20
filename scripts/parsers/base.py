@@ -164,4 +164,5 @@ class BaseParser:
             'bugs': bugs,
             'unmapped_columns': unmapped,
             'warnings': warnings,
+            'required_ok': not required_missing,   # 关键列(bug_id/title/status)齐备才视为缺陷主表
         }

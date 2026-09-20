@@ -264,6 +264,13 @@ def _parse_defects(root, platform):
             use_platform = detect_platform(headers) or 'custom'
         parser = get_parser(use_platform)
         part = parser.parse_file(path)
+        if not part.get('required_ok', True):
+            # 明细表（改动记录/评论等：仅 key/标题可映射、无状态列）不并入缺陷集，
+            # 避免其按文件名排序在前时抢占 bug_id|标题 去重、污染主表字段
+            dataset['meta']['input_files'].append('%s（跳过：非缺陷主表）' % fn)
+            dataset['unmapped_columns'] += ['%s: %s' % (fn, c) for c in part['unmapped_columns']]
+            dataset['warnings'] += part['warnings']
+            continue
         dataset['meta']['input_files'].append(fn)
         dataset['meta']['platform'] = dataset['meta']['platform'] or parser.label
         dataset['bugs'].extend(part['bugs'])

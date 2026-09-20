@@ -1,0 +1,22 @@
+{
+  "key": "bug_id",
+  "标题": "title",
+  "状态": "status",
+  "严重程度": "severity",
+  "优先级": "priority",
+  "所属模块": "module",
+  "报告人": "reporter",
+  "经办人": "assignee",
+  "解决人": "resolver",
+  "验证人": "verifier",
+  "创建时间": "created_at",
+  "分配时间": "assigned_at",
+  "解决时间": "resolved_at",
+  "关闭时间": "closed_at",
+  "解决结果": "resolution",
+  "重开次数": "reopen_count",
+  "标签": "labels",
+  "关联需求": "requirement_id",
+  "复现概率": "repro",
+  "备注": "remark"
+}

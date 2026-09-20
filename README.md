@@ -125,3 +125,18 @@ python scripts/cli.py analyze --root "项目A/v2.4.0" \
 - **docx 提取乱码/失败**：确认文件为 .docx（非 .doc 老格式）；内嵌图片不参与提取，按缺失标注。
 - **怎么判定复盘还是评审**：看 scan 输出的 `mode` 字段（retrospective=复盘 / review=评审）。
 - **xmind 用例解析**：兼容 XMind 8（content.xml）与 XMind Zen/2020+（content.json）；detached 游离主题不参与统计；XMind 无执行状态与回归标记，相关指标按缺失/未执行口径标注。
+
+## 工具脚本
+
+| 脚本 | 用途 |
+|---|---|
+| `scripts/jira_fetch.py` | Jira PAT 按 sprint/JQL 拉取缺陷主表+活动日志+评论（标准库实现）。主表补齐严重程度/解决结果/分配·解决·关闭时间/重开次数等复盘全字段（自 changelog 派生），明细自动落 `defects/明细/` 子目录，并生成 `人员角色_模板.csv` |
+| `scripts/mht_extract.py` | MHTML 伪装 `.doc`（网页另存为 Word 的常见产物）→ 纯文本提取 |
+| `scripts/docx_extract.py` | OOXML docx → 纯文本提取（含删除线检测） |
+| `scripts/custom_field_map.json` | 内置「Jira API 拉取表头 → 标准字段」映射，配合 `parse --platform custom` 使用 |
+
+```bash
+# PAT 拉取示例（PAT 亦可由环境变量 JIRA_PAT 提供）
+python scripts/jira_fetch.py --base http://jira.example.com --project WLXT --sprint 21 --out "物流管理系统/v1.5.0/defects"
+# 随后正常走 scan → parse --platform custom → analyze → html
+```

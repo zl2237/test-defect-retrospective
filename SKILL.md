@@ -36,7 +36,7 @@ python scripts/cli.py session show
 
 | 序 | 问题（session key） | 选项 | 分支逻辑 / 对分析的作用 |
 |---|---|---|---|
-| Q1 | 本次缺陷数据来自哪个平台？（defect_platform） | Jira / 禅道 / 其他平台 | 决定解析插件（parse 的 auto 探测以此兜底）。选「其他平台」→ 追问：① 导出文件格式 ② 核心字段说明（列名→含义），据答案将「原始列名→标准字段」写入 `scripts/custom_field_map.json`（字段对照见附录A），然后按 `defect_platform=custom` 保存 |
+| Q1 | 本次缺陷数据来自哪个平台？（defect_platform） | Jira / 禅道 / 其他平台 | 决定解析插件（parse 的 auto 探测以此兜底）。无导出文件时可先用 `scripts/jira_fetch.py` 通过 PAT 直接拉取（见附录B）。选「其他平台」→ 追问：① 导出文件格式 ② 核心字段说明（列名→含义），据答案将「原始列名→标准字段」写入 `scripts/custom_field_map.json`（字段对照见附录A），然后按 `defect_platform=custom` 保存 |
 | Q2 | 本版本的发布（上线）时间是？（release_time） | 输入 `YYYY-MM-DD HH:MM` / 不清楚 | **存量遗留缺陷判定基准**。选「不清楚」→ 保存 `release_time=unknown`，analyze 省略 `--release-time`，脚本以缺陷最大创建时间近似并在报告标注口径 |
 | Q3 | 上一版本的复盘数据在哪？（has_prev_report） | 同项目目录下（自动探测）/ 在其他位置 / 没有 | **版本环比与规律性反复缺陷依据**。同项目目录→语义排序自动探测；其他位置→追问路径保存 `prev_report_path`；没有→环比章节标注缺失 |
 | Q4 | 人员角色名单 人员角色.csv？（team_roles） | 已准备好 / 不提供 | **人员效能角色口径**。不提供→按「提报人=测试、解决人=开发」近似，报告显式警示角色混入风险；已准备好→仅「测试」计入提报/验证效能、「前端/后端」计入修复效能，混入角色自动剔除 |
@@ -79,10 +79,10 @@ python scripts/cli.py init --root "{项目名}/{版本号}"
 并在报告中显式警示角色混入风险。
 
 **文件格式说明**（无需问卷确认，解析器自动识别）：
-- 需求文档：docx（自动提取，含删除线识别）/ md / txt；**图片与在线链接请导出为文本后放入**，否则对应评估按缺失标注
+- 需求文档：docx（自动提取，含删除线识别）/ md / txt；扩展名为 .doc 但实为 MHTML 网页存档的文件，先用 `scripts/mht_extract.py` 提取为 txt 再放入；**图片与在线链接请导出为文本后放入**，否则对应评估按缺失标注
 - 测试用例：CSV / Excel / XMind（中心主题=套件、中间层级=模块、叶子=用例、优先级图标→P0~P3）
 - 技术方案：docx / md / txt
-- 缺陷导出：CSV / Excel（Jira/禅道表头自动识别）
+- 缺陷导出：CSV / Excel（Jira/禅道表头自动识别；Jira API 拉取的自定义表头配合 `scripts/custom_field_map.json` 走 custom 解析；改动记录/评论等明细表请放 `defects/明细/` 子目录——即使平铺在 defects/ 下，解析器也会自动跳过无状态列的明细文件）
 
 等待用户确认文件就位后，进入分析流程。
 
@@ -383,6 +383,8 @@ python scripts/cli.py analyze --root "{项目名}/{版本号}" [--release-time "
 python scripts/cli.py all    --root "{项目名}/{版本号}"          # [复盘] scan+parse+analyze
 python scripts/cli.py html   --root "{项目名}/{版本号}"          # 仪表板/文档模式自动识别
 python scripts/docx_extract.py "<docx路径>" [-o out.txt]         # docx 提取（含删除线检测）
+python scripts/jira_fetch.py --base <Jira地址> --pat <PAT> --project WLXT --sprint 21 --out "{项目名}/{版本号}/defects"   # PAT 拉取缺陷主表+活动日志+评论（明细落 defects/明细/，自动生成 人员角色_模板.csv，PAT 亦可由环境变量 JIRA_PAT 提供）
+python scripts/mht_extract.py <.doc/.mht 文件或目录> [-o 输出目录]  # MHTML 伪装 .doc → 纯文本
 ```
 
 ## 附录C：自定义平台映射文件（Q1 选「其他」时由 AI 生成）
