@@ -801,7 +801,12 @@ def render_html(metrics, sections_by_cat):
         '<div class="bd">%s</div></div>'
         '<div class="block"><h3>PRIORITY · 业务优先级能量谱<em>%s</em></h3>'
         '<div class="bd">%s</div></div></div>'
-        % (ov['valid_total'], _segbar_html(sev_rows, SEV_COLORS),
+        % (ov['valid_total'],
+           ('<div class="missing-box"><b>⚠️ 严重程度字段未配置</b>'
+            '<ul><li>缺陷导出无 severity 数据（100% 未分级），该项暂无法分析；'
+            '建议 Jira 启用严重程度字段并在提报时必填</li></ul></div>'
+            if (not sev_rows or all(n == '未分级' for n, _ in sev_rows))
+            else _segbar_html(sev_rows, SEV_COLORS)),
            ov['valid_total'], _segbar_html(pri_rows, PRI_COLORS)) +
         '<div class="block"><h3>LIFECYCLE · 全生命周期管道<em>响应→修复→验证</em></h3>'
         '<div class="bd">%s</div></div>' % _pipe_html(ps['lifecycle']))
@@ -1020,7 +1025,9 @@ def write_doc_html(md_path, reports_dir, stamp='需求评审', stamp_color=None)
     with open(md_path, 'r', encoding='utf-8') as f:
         md_text = f.read()
     base = re.sub(r'\.md$', '', os.path.basename(md_path))
-    path = _unique_path(os.path.join(reports_dir, '%s_%s.html' % (base, _ts())))
+    if not re.search(r'_\d{8}(_\d{6})?$', base):   # 已含时间戳则不重复追加
+        base = '%s_%s' % (base, _ts())
+    path = _unique_path(os.path.join(reports_dir, base + '.html'))
     with open(path, 'w', encoding='utf-8') as f:
         f.write(render_doc_html(md_text, stamp=stamp, stamp_color=stamp_color))
     return path
