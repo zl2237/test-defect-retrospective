@@ -94,7 +94,7 @@ python scripts/cli.py init --root "{项目名}/{版本号}"
 python scripts/cli.py scan --root "{项目名}/{版本号}"
 ```
 
-- 向用户展示「缺失素材清单」（JSON 同时存入 reports/素材校验_{时间戳}.json）。
+- 向用户展示「缺失素材清单」（JSON 同时存入 reports/{系统名}_{迭代号}_素材校验_{时间戳}.json）。
 - 输出 `mode` 字段判定运行模式（见开头路由表）：`retrospective`=复盘模式（走第 2~5 步）；`review`=定性评审模式（走第 3R 步）。
 - 发布时间已在问卷 Q2 收集：分析执行时直接读取 session 的 `release_time`（值为 `unknown` 时省略 `--release-time`），scan 阶段不再重复询问。
 
@@ -104,7 +104,7 @@ python scripts/cli.py scan --root "{项目名}/{版本号}"
 python scripts/cli.py parse --root "{项目名}/{版本号}" [--platform jira|zentao|custom|auto]
 ```
 
-- 输出 `reports/中间数据_缺陷标准集_{时间戳}.json`，与源平台解耦。
+- 输出 `reports/{系统名}_{迭代号}_中间数据_缺陷标准集_{时间戳}.json`，与源平台解耦。
 - `--platform auto`（默认）按表头特征自动识别 Jira / 禅道。
 - 若问卷 Q1 选「其他」：使用 `scripts/custom_field_map.json` 映射（custom 解析插件）。
 
@@ -116,10 +116,12 @@ python scripts/cli.py analyze --root "{项目名}/{版本号}" [--release-time "
 
 自动生成（带时间戳，不覆盖历史报告、不修改任何原始输入文件）：
 
-- `reports/复盘报告_产品_{ts}.md` / `复盘报告_产品_{ts}.json`
-- `reports/复盘报告_开发_{ts}.md` / `复盘报告_开发_{ts}.json`
-- `reports/复盘报告_测试_{ts}.md` / `复盘报告_测试_{ts}.json`
-- `reports/复盘数据_指标全量_{ts}.json`（全量指标结构化数据，供工具调用与下版本环比）
+- `reports/{系统名}_{迭代号}_复盘报告_产品_{ts}.md/.json`
+- `reports/{系统名}_{迭代号}_复盘报告_开发_{ts}.md/.json`
+- `reports/{系统名}_{迭代号}_复盘报告_测试_{ts}.md/.json`
+- `reports/{系统名}_{迭代号}_复盘数据_指标全量_{ts}.json`（全量指标结构化数据，供工具调用与下版本环比）
+
+> 产物命名规则统一为：**{系统名}_{迭代号}_{产物分类}_{时间戳}**（系统名/迭代号取自 root 目录，如 `物流管理系统_v1.6.0_复盘报告_产品_20260920_144615.md`）。
 
 ### 第 3.5 步：汇总 HTML 报告（双模式自动识别，AI 定性补充完成后执行）
 
@@ -128,7 +130,7 @@ python scripts/cli.py html --root "{项目名}/{版本号}"
 ```
 
 生成 HTML（**双模式自动识别**）：
-- **仪表板模式**（存在指标 JSON）：`复盘报告_汇总_{ts}.html`
+- **仪表板模式**（存在指标 JSON）：`{系统名}_{迭代号}_复盘报告_汇总_{ts}.html`
   - 单文件自包含（内嵌 CSS/JS/SVG 图表，零外部依赖），可离线打开、下载、迁移分享
   - 读取最新指标全量 JSON + 三份最新 md 报告（**含已追加的 AI 定性段落**），合并渲染
   - 总览 Tab：核心读数窗、严重程度环形图、优先级/模块 TOP10/生命周期耗时条形图、缺失清单
@@ -142,18 +144,18 @@ python scripts/cli.py html --root "{项目名}/{版本号}"
 
 无缺陷导出时，按各目录内容分别产出评审报告（可组合，各出各的报告）。**评审报告以 Markdown 为最终产物，不生成单独的 HTML**；如确需档案风 HTML，可选执行 `html --doc <md路径>`（非必需步骤）。
 
-**3R.1 需求评审**（requirements/ 有文件）→ 产出 `需求评审报告_{版本}_{ts}.md`
+**3R.1 需求评审**（requirements/ 有文件）→ 产出 `{系统名}_{迭代号}_需求评审报告_{ts}.md`
 - docx 先用 `docx_extract.py` 提取（删除线段落识别废弃范围与矛盾）；md/txt 直接读取；在线链接无法访问则标注缺失
 - 评审框架：结构拆解（功能点/范围矩阵）→ 四维评估（逻辑自洽性/重复赘述/文案可读性/提示语清晰度）→ 交互体验评估 → **测试视角澄清清单（P0/P1/P2 分级，本模式核心价值）**
 - 报告头部标注运行模式与量化缺失项
 
-**3R.2 测试用例评审**（test_cases/ 有文件）→ 产出 `用例评审报告_{版本}_{ts}.md`
+**3R.2 测试用例评审**（test_cases/ 有文件）→ 产出 `{系统名}_{迭代号}_用例评审报告_{ts}.md`
 - 输入格式：CSV / Excel / **XMind**（.xmind 自动解析：中心主题=套件名、中间层级=模块路径、叶子节点=用例标题、优先级图标 priority-1~6 → P0~P3；兼容 XMind 8 content.xml 与 Zen content.json；XMind 无执行状态，status 记「未执行」）
 - 量化底稿：用 python 调 `analyzer.parse_testcases(test_cases目录)` 统计用例总数/状态分布/模块分布/需求关联率/回归标记占比（命令示例：`python -c "import sys; sys.path.insert(0,'scripts'); import analyzer as az, json; c,w=az.parse_testcases(r'<test_cases路径>'); print(json.dumps({'total':len(c or []),'warnings':w},ensure_ascii=False))"`）
 - 定性评审框架：结构完整性（编号/标题/前置/步骤/预期五要素齐备率；XMind 用例聚焦层级组织合理性）→ 覆盖设计（模块均衡度、需求关联完整率、边界/异常/并发/弱网关键词占比）→ 文案可判定性（步骤可执行、预期可断言，主观词识别）→ 优先级与回归标记合理性（XMind 用例用图标优先级）→ 澄清清单
 - 报告头部标注运行模式；复盘模式中 XMind 用例无执行状态，执行类指标按「未执行」口径并标注提示
 
-**3R.3 技术方案评审**（tech_designs/ 有文件）→ 产出 `技术评审报告_{版本}_{ts}.md`
+**3R.3 技术方案评审**（tech_designs/ 有文件）→ 产出 `{系统名}_{迭代号}_技术评审报告_{ts}.md`
 - 文档读取同 3R.1（docx 提取/md/txt 直读）
 - 评审框架：方案完整性（背景/目标/选型对比/影响面/灰度与回滚五要素）→ 风险识别（数据迁移/兼容/性能/安全）→ **可测试性评估（是否有可验证的验收标准、监控与告警方案）——测试视角核心** → 与需求一致性线索（若 requirements/ 同在）→ 澄清清单
 - 报告头部标注运行模式
@@ -321,7 +323,7 @@ python scripts/cli.py html --root "{项目名}/{版本号}"
 ⚠️ 【数据缺失】缺少XX文件/字段，该项暂无法分析
 ```
 
-评审模式产物（第 3R 步）：`需求评审报告_{版本}_{ts}.md`、`用例评审报告_{版本}_{ts}.md`、`技术评审报告_{版本}_{ts}.md`（如需 HTML 可用 `html --doc` 可选生成），章节结构见 3R.1~3R.3 评审框架。
+评审模式产物（第 3R 步）：`{系统名}_{迭代号}_需求评审报告_{ts}.md`、`{系统名}_{迭代号}_用例评审报告_{ts}.md`、`{系统名}_{迭代号}_技术评审报告_{ts}.md`（如需 HTML 可用 `html --doc` 可选生成），章节结构见 3R.1~3R.3 评审框架。
 
 ## 五、缺失数据处理规则（硬性）
 

@@ -224,7 +224,10 @@ def cmd_scan(args):
     prev_root = detect_prev_version(root)
     result['prev_version'] = None
     if prev_root:
-        prev_json = _latest(os.path.join(prev_root, 'reports'), '复盘数据_指标全量_')
+        ppv = '%s_%s' % (os.path.basename(os.path.dirname(prev_root)),
+                         os.path.basename(prev_root))
+        prev_json = _latest(os.path.join(prev_root, 'reports'),
+                            '%s_复盘数据_指标全量_' % ppv)
         result['prev_version'] = {
             'path': prev_root, 'version': os.path.basename(prev_root),
             'has_metrics': bool(prev_json)}
@@ -236,7 +239,8 @@ def cmd_scan(args):
 
     reports_dir = os.path.join(root, 'reports')
     os.makedirs(reports_dir, exist_ok=True)
-    scan_file = os.path.join(reports_dir, '素材校验_%s.json' % _ts())
+    pv = '%s_%s' % (os.path.basename(os.path.dirname(root)), os.path.basename(root))
+    scan_file = os.path.join(reports_dir, '%s_素材校验_%s.json' % (pv, _ts()))
     with open(scan_file, 'w', encoding='utf-8') as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
     result['scan_report'] = scan_file
@@ -299,7 +303,8 @@ def cmd_parse(args):
     dataset = _parse_defects(root, args.platform)
     reports_dir = os.path.join(root, 'reports')
     os.makedirs(reports_dir, exist_ok=True)
-    out = os.path.join(reports_dir, '中间数据_缺陷标准集_%s.json' % _ts())
+    out = os.path.join(
+        reports_dir, '%s_%s_中间数据_缺陷标准集_%s.json' % (project, version, _ts()))
     with open(out, 'w', encoding='utf-8') as f:
         json.dump(dataset, f, ensure_ascii=False, indent=2)
     _print_json({
@@ -336,7 +341,7 @@ def cmd_analyze(args):
     project, version = _split_root(root)
     reports_dir = os.path.join(root, 'reports')
     defects_file = getattr(args, 'defects_file', None) or _latest(
-        reports_dir, '中间数据_缺陷标准集_')
+        reports_dir, '%s_%s_中间数据_缺陷标准集_' % (project, version))
     if not defects_file or not os.path.exists(defects_file):
         raise SystemExit('未找到标准中间数据集，请先执行 parse')
     dataset = _load_json(defects_file)
@@ -354,10 +359,14 @@ def cmd_analyze(args):
     prev_root = args.prev_root or detect_prev_version(root)
     prev_metrics, prev_dataset = None, None
     if prev_root:
-        pm = _latest(os.path.join(prev_root, 'reports'), '复盘数据_指标全量_')
+        ppv = '%s_%s' % (os.path.basename(os.path.dirname(prev_root)),
+                         os.path.basename(prev_root))
+        pm = _latest(os.path.join(prev_root, 'reports'),
+                     '%s_复盘数据_指标全量_' % ppv)
         if pm:
             prev_metrics = _load_json(pm)
-        pd_ = _latest(os.path.join(prev_root, 'reports'), '中间数据_缺陷标准集_')
+        pd_ = _latest(os.path.join(prev_root, 'reports'),
+                      '%s_中间数据_缺陷标准集_' % ppv)
         if pd_:
             prev_dataset = _load_json(pd_)
 
@@ -411,20 +420,23 @@ def cmd_html(args):
     import io
     root = args.root.rstrip('/\\')
     reports_dir = os.path.join(root, 'reports')
+    pv = '%s_%s' % (os.path.basename(os.path.dirname(root)), os.path.basename(root))
     metrics_file = getattr(args, 'metrics_file', None) or _latest(
-        reports_dir, '复盘数据_指标全量_')
+        reports_dir, '%s_复盘数据_指标全量_' % pv)
     # 文档模式：--doc 指定 md；或无指标 JSON 时自动渲染各类型评审报告（每类取最新一份）
     doc_file = getattr(args, 'doc', None)
     if doc_file is None and not (metrics_file and os.path.exists(metrics_file)):
         doc_files = []
-        for prefix in ('需求评审报告_', '用例评审报告_', '技术评审报告_'):
+        for prefix in ('%s_需求评审报告_' % pv, '%s_用例评审报告_' % pv,
+                       '%s_技术评审报告_' % pv):
             docs = sorted(glob.glob(os.path.join(reports_dir, prefix + '*.md')))
             if docs:
                 doc_files.append((prefix, docs[-1]))
         if doc_files:
             outs = []
-            stamp_map = {'需求评审报告_': '需求评审', '用例评审报告_': '用例评审',
-                         '技术评审报告_': '技术评审'}
+            stamp_map = {'%s_需求评审报告_' % pv: '需求评审',
+                         '%s_用例评审报告_' % pv: '用例评审',
+                         '%s_技术评审报告_' % pv: '技术评审'}
             for prefix, df in doc_files:
                 outs.append(reporter.write_doc_html(
                     df, reports_dir, stamp=stamp_map.get(prefix, '评审')))
@@ -444,7 +456,8 @@ def cmd_html(args):
 
     sections_by_cat = {}
     for cat in ('产品', '开发', '测试'):
-        mds = sorted(glob.glob(os.path.join(reports_dir, '复盘报告_%s_*.md' % cat)))
+        mds = sorted(glob.glob(os.path.join(
+            reports_dir, '%s_复盘报告_%s_*.md' % (pv, cat))))
         if mds:
             with io.open(mds[-1], 'r', encoding='utf-8') as f:
                 sections_by_cat[cat] = {t: reporter.md_block_to_html(b)

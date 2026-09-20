@@ -349,11 +349,12 @@ def write_reports(metrics, reports_dir):
     os.makedirs(reports_dir, exist_ok=True)
     ts = _ts()
     meta = metrics['meta']
+    base = '%s_%s' % (meta['project'], meta['version'])   # 系统名_迭代号 前缀
     out = []
     for category, builder in _BUILDERS.items():
         sections = builder(metrics)
-        md_name = '复盘报告_%s_%s.md' % (category, ts)
-        json_name = '复盘报告_%s_%s.json' % (category, ts)
+        md_name = '%s_复盘报告_%s_%s.md' % (base, category, ts)
+        json_name = '%s_复盘报告_%s_%s.json' % (base, category, ts)
         md_path = _unique_path(os.path.join(reports_dir, md_name))
         json_path = _unique_path(os.path.join(reports_dir, json_name))
         with open(md_path, 'w', encoding='utf-8') as f:
@@ -371,7 +372,8 @@ def write_reports(metrics, reports_dir):
         with open(json_path, 'w', encoding='utf-8') as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
         out += [md_path, json_path]
-    full_path = _unique_path(os.path.join(reports_dir, '复盘数据_指标全量_%s.json' % ts))
+    full_path = _unique_path(os.path.join(
+        reports_dir, '%s_复盘数据_指标全量_%s.json' % (base, ts)))
     with open(full_path, 'w', encoding='utf-8') as f:
         json.dump(metrics, f, ensure_ascii=False, indent=2)
     out.append(full_path)
@@ -879,7 +881,7 @@ def render_html(metrics, sections_by_cat):
   </main>
   <footer class="colophon">
     <span>ISSUED BY test-defect-retrospective SKILL</span>
-    <span>口径与全量数据 → 复盘数据_指标全量_*.json</span>
+    <span>口径与全量数据 → {系统名}_{迭代号}_复盘数据_指标全量_*.json</span>
     <span>自包含单文件 · 可离线查阅与转递</span>
   </footer>
 </div>
@@ -927,7 +929,9 @@ tt.onclick=function(){window.scrollTo({top:0,behavior:'smooth'});};
 def write_html(metrics, sections_by_cat, reports_dir):
     """输出汇总 HTML（时间戳幂等），返回文件路径。"""
     os.makedirs(reports_dir, exist_ok=True)
-    path = _unique_path(os.path.join(reports_dir, '复盘报告_汇总_%s.html' % _ts()))
+    base = '%s_%s' % (metrics['meta']['project'], metrics['meta']['version'])
+    path = _unique_path(os.path.join(
+        reports_dir, '%s_复盘报告_汇总_%s.html' % (base, _ts())))
     with open(path, 'w', encoding='utf-8') as f:
         f.write(render_html(metrics, sections_by_cat))
     return path
