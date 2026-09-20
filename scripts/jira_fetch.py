@@ -22,7 +22,8 @@
 说明：
 - 仅标准库（urllib），无 requests/openpyxl 依赖；只读 GET，不修改 Jira 数据。
 - 状态归组使用 statusCategory（new/indeterminate/done）优先，中文状态名兜底，口径对齐 normalize.py。
-- 重开次数 = changelog 中状态从「已解决/已关闭类」回退到「打开/处理中类」的次数。
+- 重开次数 = changelog 中状态从「已解决/已关闭/验证中类」回退到「打开/处理中/待确认类」的次数
+  （覆盖常见工作流「验证中→待确认」的测试打回形态）。
 - 自定义字段：--severity-field / --root-cause-field 可指定 customfield_XXX 键名。
 """
 import argparse
@@ -39,9 +40,9 @@ import urllib.request
 
 _DONE_WORDS = {'已关闭', '关闭', '已完成', '已完结', '已验证', '已验证通过', '已验收',
                'closed', 'done', 'verified'}
-_RESOLVED_WORDS = {'已解决', '解决', '已修复', '修复完成', '待验证', '待测试验证',
+_RESOLVED_WORDS = {'已解决', '解决', '已修复', '修复完成', '待验证', '待测试验证', '验证中',
                    'resolved', 'fixed', 'ready for qa', 'in qa'}
-_OPEN_WORDS = {'打开', '待办', '新建', '激活', '待处理', '未处理', '待指派', '重新打开', '重开',
+_OPEN_WORDS = {'打开', '待办', '新建', '激活', '待处理', '未处理', '待指派', '待确认', '重新打开', '重开',
                'open', 'to do', 'todo', 'backlog', 'new', 'created', 'active', 'reopened'}
 _IN_PROGRESS_WORDS = {'处理中', '进行中', '开发中', '修复中',
                       'in progress', 'processing', 'investigating'}
