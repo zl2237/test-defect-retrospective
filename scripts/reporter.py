@@ -75,10 +75,9 @@ def build_product(m):
         _ai_placeholder('逻辑自洽性 / 重复赘述 / 文案可读性 / 提示语清晰度 四维评估')
         if has_req_doc else _missing_line('requirements/ 需求文档文件'))
 
-    sec['二、模块缺陷与需求问题关联分析'] = _table(
-        req['module_req_issues']) if req['module_req_issues'] else (
-        _table(req['module_req_issues']) + '\n' +
-        _missing_line('缺陷根因字段（无法定位需求侧根因）'))
+    # 根因字段未启用：模块×需求根因关联整节不渲染（不以空表/缺失占位展示）
+    if req['module_req_issues']:
+        sec['二、模块缺陷与需求问题关联分析'] = _table(req['module_req_issues'])
 
     if req['change_stats']:
         cs = req['change_stats']
@@ -108,7 +107,10 @@ def build_product(m):
         '未在缺陷标题/备注中识别到上下游依赖/联调关键词缺陷。')
 
     r = req['req_introduced']
-    sec['六、需求引入类缺陷溯源与占比'] = (
+    if not ov.get('root_cause'):
+        pass  # 根因字段未启用：整节不渲染（不以 0 条/缺失占位展示）
+    else:
+        sec['六、需求引入类缺陷溯源与占比'] = (
         '根因=需求问题的缺陷：**%s** 条，占有效缺陷 **%s%%**\n\n%s'
         % (r['count'], r['rate(%)'], _brief_table(r['items']))
         if r['count'] else
@@ -151,9 +153,11 @@ def build_dev(m):
            (_table(ov['recurring'] or []) + '\n' + _missing_line('上一版本缺陷数据'))))
 
     rc = ov['root_cause']
-    sec['二、缺陷根因分类统计'] = (
-        _table(rc) + '\n\n' + _ai_placeholder('针对TOP根因的开发侧改进分析')
-        if rc else _table(rc) + '\n' + _missing_line('缺陷根因字段'))
+    if not rc:
+        pass  # 根因字段未启用：整节不渲染（不以空表/缺失占位展示）
+    else:
+        sec['二、缺陷根因分类统计'] = (
+            _table(rc) + '\n\n' + _ai_placeholder('针对TOP根因的开发侧改进分析'))
 
     oc = ov['occasional']
     sec['三、偶现缺陷清单'] = (
@@ -238,38 +242,65 @@ def build_test(m):
         if cmp else _missing_line('上一版本复盘报告'))
 
     if tc:
-        sec['五、用例覆盖率与需求-用例双向追踪'] = (
-            '用例总数 **%s** ｜ 已执行 **%s** ｜ 执行覆盖率 **%s%%**\n\n%s\n\n%s\n\n%s'
-            % (tc['case_total'], tc['executed'], tc['exec_coverage(%)'],
-               _table(tc['status_dist']),
-               '**需求-用例双向覆盖**：缺陷关联需求 %s 个，被用例覆盖 %s 个（%s%%）；'
-               '用例关联需求完整率 %s%%'
-               % (tc['req_coverage']['缺陷关联需求数'], tc['req_coverage']['被用例覆盖数'],
-                  tc['req_coverage']['需求被用例覆盖比例(%)'],
-                  tc['req_coverage']['用例关联需求完整率(%)']),
-               _table([{'未覆盖需求': x} for x in tc['req_coverage']['未覆盖需求清单']])))
-        sec['六、测试阻塞事件统计'] = (
-            '阻塞用例 **%s** 条\n\n%s' % (
-                tc['blocked_events']['total'],
-                _table([{'分类': x['分类'], '数量': x['数量'],
-                         '用例': '、'.join(x['用例'][:10])} for x in
-                        tc['blocked_events']['by_category']])))
-        rg = tc['regression']
-        sec['七、回归工作量统计'] = (
-            '回归用例数 **%s** ｜ 回归执行时长合计 **%s 分钟**'
-            % (rg['regression_case_count'], rg['regression_duration_min']))
+        p5 = ['用例总数 **%s**' % tc['case_total']]
+        if tc.get('exec_trackable'):
+            p5.append('已执行 **%s** ｜ 执行覆盖率 **%s%%**\n\n%s'
+                      % (tc['executed'], tc['exec_coverage(%)'],
+                         _table(tc['status_dist'])))
+        if tc.get('defect_case_linkable'):
+            rc = tc['req_coverage']
+            p5.append('**需求-用例双向覆盖（编号关联）**：缺陷关联需求 %s 个，被用例覆盖'
+                      ' %s 个（%s%%）；用例关联需求完整率 %s%%'
+                      % (rc['缺陷关联需求数'], rc['被用例覆盖数'],
+                         rc['需求被用例覆盖比例(%)'],
+                         rc['用例关联需求完整率(%)']))
+            if rc['未覆盖需求清单']:
+                p5.append(_table([{'未覆盖需求': x}
+                                  for x in rc['未覆盖需求清单']]))
+        rcm = tc.get('req_case_match')
+        if rcm:
+            p5.append('**需求-用例关联分析（名称匹配·查漏配）**：需求 %s 个，已覆盖 %s 个，'
+                      '疑似漏配 %s 个\n\n%s\n\n%s'
+                      % (rcm['需求总数'], rcm['已覆盖'], rcm['疑似漏配'],
+                         _table(rcm['明细']),
+                         _table([{'漏配需求': x} for x in rcm['漏配清单']])
+                         if rcm['漏配清单'] else '（未发现漏配需求）'))
+        if not tc.get('exec_trackable') and not tc.get('defect_case_linkable'):
+            p5.append('> 口径说明：缺陷与用例之间缺少编号关联字段，且用例无执行状态，'
+                      '执行覆盖率/阻塞/回归/模块缺陷-用例缺口等指标**不分析**；'
+                      '本节仅呈现需求-用例关联分析结果。')
+        sec['五、用例与需求关联分析' if not tc.get('defect_case_linkable')
+            else '五、用例覆盖率与需求-用例双向追踪'] = '\n\n'.join(p5)
+        if tc.get('exec_trackable'):
+            sec['六、测试阻塞事件统计'] = (
+                '阻塞用例 **%s** 条\n\n%s' % (
+                    tc['blocked_events']['total'],
+                    _table([{'分类': x['分类'], '数量': x['数量'],
+                             '用例': '、'.join(x['用例'][:10])} for x in
+                            tc['blocked_events']['by_category']])))
+            rg = tc['regression']
+            sec['七、回归工作量统计'] = (
+                '回归用例数 **%s** ｜ 回归执行时长合计 **%s 分钟**'
+                % (rg['regression_case_count'], rg['regression_duration_min']))
     else:
-        for title in ('五、用例覆盖率与需求-用例双向追踪', '六、测试阻塞事件统计',
+        for title in ('五、用例与需求关联分析', '六、测试阻塞事件统计',
                       '七、回归工作量统计'):
             sec[title] = _missing_line('test_cases/ 测试用例文件')
 
-    gap_table = _table(risk['module_gaps']) if risk['module_gaps'] else '（未发现明显模块缺口）'
     kw_lines = '\n'.join('- %s：%s' % (k, '、'.join(v[:10]))
                          for k, v in risk['keyword_hits'].items())
-    sec['八、潜在漏测风险清单'] = (
-        ('**高风险场景关键词命中**\n%s\n\n**模块缺陷-用例缺口**\n%s\n\n%s'
-         % (kw_lines or '（无命中）', gap_table,
-            _ai_placeholder('结合边界/并发/大数据量/弱网场景补充漏测风险清单'))))
+    if tc is None or tc.get('defect_case_linkable'):
+        gap_table = (_table(risk['module_gaps']) if risk['module_gaps']
+                     else '（未发现明显模块缺口）')
+        sec['八、潜在漏测风险清单'] = (
+            '**高风险场景关键词命中**\n%s\n\n**模块缺陷-用例缺口**\n%s\n\n%s'
+            % (kw_lines or '（无命中）', gap_table,
+               _ai_placeholder('结合边界/并发/大数据量/弱网场景补充漏测风险清单')))
+    else:
+        sec['八、潜在漏测风险清单'] = (
+            '**高风险场景关键词命中**\n%s\n\n%s'
+            % (kw_lines or '（无命中）',
+               _ai_placeholder('结合边界/并发/大数据量/弱网场景补充漏测风险清单')))
 
     sec['九、测试环境配置差异风险'] = (
         _ai_placeholder('向用户收集测试环境与生产配置差异信息后评估风险；'

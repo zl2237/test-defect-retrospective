@@ -331,7 +331,8 @@ def load_team_roles(root):
 class Analyzer:
     def __init__(self, dataset, release_time=None, testcase_cases=None,
                  req_change_rows=None, prev_metrics=None, prev_dataset=None,
-                 project='', version='', has_req_docs=False, team_roles=None):
+                 project='', version='', has_req_docs=False, team_roles=None,
+                 req_doc_names=None):
         self.dataset = dataset                      # parse 输出的标准中间数据集
         self.bugs = dataset.get('bugs', [])
         self.release_time = release_time            # datetime 或 None
@@ -343,6 +344,7 @@ class Analyzer:
         self.project = project
         self.version = version
         self.has_req_docs = has_req_docs            # requirements/ 是否有文件
+        self.req_doc_names = req_doc_names or []      # 需求文档名清单（供名称匹配）
         self.team_roles = team_roles                # {姓名: 角色} 或 None（人员角色.csv）
         self.missing = []                           # 缺失项登记（供报告标注）
 
@@ -420,7 +422,13 @@ class Analyzer:
         invalid_total = total - len(valid)
         closed = [b for b in valid if b.get('status_group') == 'closed']
         dup_idx, dup_groups = self._find_duplicates(valid)
-        occasional = [b for b in valid if b.get('is_occasional')]
+        _occ_words = ('偶现', '偶发', '偶尔', '间歇', '不稳定', '无法复现',
+                     '不能复现', '复现不了', '概率性', '随机出现')
+        occasional = [
+            b for b in valid
+            if b.get('is_occasional') or any(
+                w in (str(b.get('title') or '') + str(b.get('remark') or ''))
+                for w in _occ_words)]
 
         # 存量遗留缺陷
         release_dt = self._release_dt()
@@ -777,6 +785,64 @@ class Analyzer:
 
     # ---- 5. 测试执行指标 ----------------------------------------------------
 
+    def _req_case_match(self):
+        """需求-用例关联分析（名称匹配，始终执行）：检查每个需求是否有对应用例，输出漏配清单。
+        匹配口径：需求文档名 ↔ 用例模块路径段（归一化后包含或相似度≥0.45）；
+        用例数按去重并集统计（一条用例命中即计 1，不因多段命中重复计）。"""
+        import difflib
+        if not self.req_doc_names or not self.cases:
+            return None
+
+        def _norm(s):
+            s = re.sub(r'^【[^】]*】', '', str(s or ''))
+            return re.sub(r'[\s\-_+（）()【】\[\]、,，.。:：/\\]+', '', s).lower()
+
+        def _hit(nn, key):
+            kn = _norm(key)
+            if not kn:
+                return 0.0
+            if nn in kn or kn in nn:
+                return 1.0
+            r = difflib.SequenceMatcher(None, nn, kn).ratio()
+            return r if r >= 0.45 else 0.0
+
+        # 需求清单：按文件逐行列出（不合并同名——【日期】前缀区分延期件与本期件）
+        order = []
+        for fn in self.req_doc_names:
+            name = os.path.splitext(str(fn))[0].strip()
+            if name and name not in order:
+                order.append(name)
+        if not order:
+            return None
+
+        rows, misses = [], []
+        for name in order:
+            nn = _norm(name)
+            matched_ids, seg_scores = set(), defaultdict(float)
+            for idx, c in enumerate(self.cases):
+                segs = set(str(c.get('module') or '').split('/'))
+                for s in segs:
+                    r = _hit(nn, s)
+                    if r > 0:
+                        matched_ids.add(idx)
+                        seg_scores[s.strip()] = max(seg_scores.get(s.strip(), 0), r)
+            label = name
+            if matched_ids:
+                tops = sorted(seg_scores, key=lambda s: -seg_scores[s])[:3]
+                rows.append({
+                    '需求': label,
+                    '命中用例组': '、'.join(
+                        (s[:18] + '…') if len(s) > 18 else s for s in tops),
+                    '用例数': len(matched_ids), '判定': '已覆盖'})
+            else:
+                rows.append({'需求': label, '命中用例组': '（无）', '用例数': 0,
+                             '判定': '疑似漏配'})
+                misses.append(label)
+        return {'需求总数': len(order),
+                '已覆盖': len(order) - len(misses),
+                '疑似漏配': len(misses),
+                '漏配清单': misses, '明细': rows}
+
     def testcase_metrics(self, valid):
         if not self.cases:
             self.missing.append('缺少 test_cases/ 测试用例文件，用例执行与覆盖率指标无法分析')
@@ -785,8 +851,8 @@ class Analyzer:
         xmind_n = sum(1 for c in cases if c.get('_from_xmind'))
         if xmind_n:
             self.missing.append(
-                'test_cases 含 %d 条 XMind 用例（无执行状态字段），执行状态分布与'
-                '执行覆盖率按「未执行」口径统计，执行类指标参考意义有限' % xmind_n)
+                'test_cases 含 %d 条 XMind 用例（无执行状态字段），执行类指标'
+                '（执行覆盖率/阻塞/回归）不分析、不出现在报告中' % xmind_n)
         total = len(cases)
         counter = defaultdict(int)
         for c in cases:
@@ -800,6 +866,9 @@ class Analyzer:
                         for b in valid if b.get('requirement_id')}
         covered = reqs_in_bugs & reqs_in_cases
         cases_with_req = [c for c in cases if c.get('requirement_id')]
+        # 关联能力探测：①缺陷↔用例编号 join 是否可行（需求编号双向存在）②用例是否带执行状态字段
+        status_field_present = any(c.get('status') for c in cases)
+        defect_case_linkable = bool(reqs_in_cases and reqs_in_bugs)
 
         # 阻塞事件分类
         blocked = [c for c in cases if c['status_std'] == '阻塞']
@@ -827,6 +896,9 @@ class Analyzer:
 
         return {
             'case_total': total,
+            'exec_trackable': status_field_present,
+            'defect_case_linkable': defect_case_linkable,
+            'req_case_match': self._req_case_match(),
             'status_dist': [{'状态': s, '数量': counter[s], '占比(%)': _pct(counter[s], total)}
                             for s in ('通过', '失败', '阻塞', '跳过', '未执行') if counter[s]],
             'executed': executed,
@@ -974,6 +1046,18 @@ class Analyzer:
             self.missing.append('缺少 requirements/ 需求文档，需求评审类定性分析无法执行')
         overview, valid = self.overview()
         personnel = self.personnel(valid, overview)
+        if self.team_roles:
+            _known = set(self.team_roles)
+            _seen = set()
+            for b in self.bugs:
+                for f in ('报告人', '经办人', '解决人', '验证人'):
+                    n = str(b.get(f) or '').strip()
+                    if n and n not in _known:
+                        _seen.add(n)
+            if _seen:
+                self.missing.append(
+                    '人员角色.csv 未登记人员：%s（已按「未登记」口径计入对应统计，'
+                    '建议补全名单）' % '、'.join(sorted(_seen)))
         req = self.requirement_metrics(valid)
         tc = self.testcase_metrics(valid)
         auto = self.automation_priority(valid)

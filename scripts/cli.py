@@ -372,13 +372,17 @@ def cmd_analyze(args):
 
     req_dir = os.path.join(root, 'requirements')
     has_req_docs = os.path.isdir(req_dir) and bool(os.listdir(req_dir))
+    req_doc_names = [fn for fn in sorted(os.listdir(req_dir))
+                     if os.path.splitext(fn)[1].lower() not in
+                     ('.csv', '.xlsx', '.xls', '.json')] if has_req_docs else []
     team_roles = az.load_team_roles(root)
 
     ana = az.Analyzer(
         dataset, release_time=release_time, testcase_cases=cases,
         req_change_rows=req_changes, prev_metrics=prev_metrics,
         prev_dataset=prev_dataset, project=project, version=version,
-        has_req_docs=has_req_docs, team_roles=team_roles)
+        has_req_docs=has_req_docs, team_roles=team_roles,
+        req_doc_names=req_doc_names)
     ana.missing.extend(tc_warnings)
     metrics = ana.build()
     files = reporter.write_reports(metrics, reports_dir)
