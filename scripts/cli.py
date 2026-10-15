@@ -373,7 +373,8 @@ def cmd_analyze(args):
     req_dir = os.path.join(root, 'requirements')
     has_req_docs = os.path.isdir(req_dir) and bool(os.listdir(req_dir))
     req_doc_names = [fn for fn in sorted(os.listdir(req_dir))
-                     if os.path.splitext(fn)[1].lower() not in
+                     if os.path.isfile(os.path.join(req_dir, fn))
+                     and os.path.splitext(fn)[1].lower() not in
                      ('.csv', '.xlsx', '.xls', '.json')] if has_req_docs else []
     team_roles = az.load_team_roles(root)
 

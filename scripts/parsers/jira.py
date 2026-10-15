@@ -3,7 +3,7 @@
 
 覆盖 Jira 中文与英文标准导出表头，以及常见自定义字段（根因、验证人、关联需求等）。
 """
-from .base import BaseParser, norm_header
+from .base import BaseParser
 
 
 class JiraParser(BaseParser):

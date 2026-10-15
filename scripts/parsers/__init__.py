@@ -4,7 +4,7 @@
 新增平台支持 = 新增模块文件 + 在 PARSER_REGISTRY 注册一项；
 主分析逻辑（analyzer / reporter / cli）不做任何修改。
 """
-from .base import BaseParser, norm_header, read_table  # noqa: F401
+from .base import norm_header
 from .jira import JiraParser
 from .zentao import ZentaoParser
 from .custom import CustomParser
