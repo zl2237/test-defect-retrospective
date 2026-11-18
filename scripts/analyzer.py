@@ -324,6 +324,36 @@ def load_team_roles(root):
     return roles or None
 
 
+def load_module_aliases(root):
+    """加载模块归一化字典（统一缺陷平台模块与用例路径到同一业务模块口径）。
+
+    查找顺序（先命中先用）：
+      1. {root}/module_aliases.json              版本级（优先级最高）
+      2. {项目目录}/module_aliases.json           项目级
+      3. scripts/module_aliases.json             全局默认（一般不放特定系统数据）
+    格式：{"目标模块": ["别名1", "别名2", ...]}，别名匹配规则见 Analyzer._norm_module。
+    """
+    candidates = []
+    if root:
+        root = root.rstrip('/\\')
+        candidates.append(os.path.join(root, 'module_aliases.json'))
+        project_dir = os.path.dirname(root)
+        if project_dir:
+            candidates.append(os.path.join(project_dir, 'module_aliases.json'))
+    candidates.append(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                   'module_aliases.json'))
+    for path in candidates:
+        if os.path.exists(path):
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                if isinstance(data, dict) and data:
+                    return data, path
+            except (OSError, ValueError):
+                continue
+    return None, None
+
+
 # ---------------------------------------------------------------------------
 # 指标计算主类
 # ---------------------------------------------------------------------------
@@ -332,7 +362,7 @@ class Analyzer:
     def __init__(self, dataset, release_time=None, testcase_cases=None,
                  req_change_rows=None, prev_metrics=None, prev_dataset=None,
                  project='', version='', has_req_docs=False, team_roles=None,
-                 req_doc_names=None):
+                 req_doc_names=None, module_aliases=None):
         self.dataset = dataset                      # parse 输出的标准中间数据集
         self.bugs = dataset.get('bugs', [])
         self.release_time = release_time            # datetime 或 None
@@ -346,7 +376,24 @@ class Analyzer:
         self.has_req_docs = has_req_docs            # requirements/ 是否有文件
         self.req_doc_names = req_doc_names or []      # 需求文档名清单（供名称匹配）
         self.team_roles = team_roles                # {姓名: 角色} 或 None（人员角色.csv）
+        # 模块归一化：{别名小写: 目标模块}；module_aliases 为 {目标: [别名,...]} 或 None
+        self._mod_alias = {}
+        if module_aliases:
+            for target, aliases in module_aliases.items():
+                for a in [target] + list(aliases or []):
+                    self._mod_alias[str(a).strip().lower()] = str(target).strip()
+        self.unmapped_case_count = 0                # 未映射到任何业务模块的用例数
         self.missing = []                           # 缺失项登记（供报告标注）
+
+    def _norm_module(self, name):
+        """模块名归一化：命中别名字典返回目标模块，否则原样返回（None→未知）。
+
+        匹配：整串小写精确比对（别名表覆盖常见叫法即可；前缀模糊易误伤，不做）。
+        """
+        n = str(name or '').strip()
+        if not n:
+            return '未知'
+        return self._mod_alias.get(n.lower(), n)
 
     # ---- 基础集合 ----------------------------------------------------------
 
@@ -440,20 +487,23 @@ class Analyzer:
         else:
             self.missing.append('缺少可用的发布时间与创建时间，存量遗留缺陷无法识别')
 
-        # 规律性反复缺陷：（模块,根因）组合与上一版本交集
+        # 规律性反复缺陷：（模块,根因）组合与上一版本交集（模块先归一化统一口径）
         recurring = None
         if self.prev_dataset or (self.prev_metrics or {}).get('module_root_pairs'):
             prev_pairs = set()
             if self.prev_dataset:
                 for b in self.prev_dataset.get('bugs', []):
                     if b.get('module') and b.get('root_cause_std'):
-                        prev_pairs.add((b['module'], b['root_cause_std']))
+                        prev_pairs.add((self._norm_module(b['module']),
+                                        b['root_cause_std']))
             else:
-                prev_pairs = {(p[0], p[1]) for p in self.prev_metrics['module_root_pairs']}
+                prev_pairs = {(self._norm_module(p[0]), p[1])
+                              for p in self.prev_metrics['module_root_pairs']}
             cur_pairs = defaultdict(list)
             for b in valid:
                 if b.get('module') and b.get('root_cause_std'):
-                    cur_pairs[(b['module'], b['root_cause_std'])].append(b)
+                    cur_pairs[(self._norm_module(b['module']),
+                               b['root_cause_std'])].append(b)
             recurring = [{
                 '模块': k[0], '根因': k[1],
                 '本版数量': len(v),
@@ -466,6 +516,36 @@ class Analyzer:
         root_cause_rows = _group_counts(
             [b for b in valid if b.get('root_cause_std')], 'root_cause_std')
 
+        # 遗留缺陷跨版本存活追踪：与上版遗留清单按编号对齐，累计存活版本数
+        survived = None
+        prev_legacy = ((self.prev_metrics or {}).get('overview') or {}).get('legacy') or {}
+        prev_map = {}
+        for it in prev_legacy.get('survived_tracking') or []:
+            prev_map[it['缺陷ID']] = it
+        if legacy:
+            survived = []
+            for b in legacy:
+                brief = _bug_brief(b)
+                pid = brief['bug_id']
+                prev_it = prev_map.get(pid)
+                if prev_it:
+                    survived.append({
+                        '缺陷ID': pid, '标题': brief['title'],
+                        '当前状态': brief['status'],
+                        '首次计入遗留': prev_it['首次计入遗留'],
+                        '累计存活版本数': (prev_it.get('累计存活版本数') or 1) + 1,
+                    })
+                else:
+                    survived.append({
+                        '缺陷ID': pid, '标题': brief['title'],
+                        '当前状态': brief['status'],
+                        '首次计入遗留': self.version,
+                        '累计存活版本数': 1,
+                    })
+            survived.sort(key=lambda r: (-r['累计存活版本数'], r['缺陷ID']))
+        elif prev_legacy:
+            survived = []
+
         overview = {
             'bug_total': total,
             'invalid_total': invalid_total,
@@ -474,7 +554,9 @@ class Analyzer:
             'resolved_rate(%)': _pct(len(closed), len(valid)),
             'by_severity': _group_counts(valid, 'severity_std', SEVERITY_ORDER),
             'by_priority': _group_counts(valid, 'priority_std', ['P0', 'P1', 'P2', 'P3']),
-            'by_module': _group_counts(valid, 'module'),
+            'by_module': _group_counts(
+                [{'module': self._norm_module(b.get('module'))} for b in valid],
+                'module'),
             'duplicates': {
                 'count': len(dup_idx),
                 'rate(%)': _pct(len(dup_idx), len(valid)),
@@ -492,10 +574,11 @@ class Analyzer:
                 'release_time_source': self.release_time_source,
                 'count': len(legacy),
                 'items': [_bug_brief(b) for b in legacy],
+                'survived_tracking': survived,
             },
             'root_cause': root_cause_rows,
             'module_root_pairs': sorted(
-                [[b.get('module') or '未知', b.get('root_cause_std')]
+                [[self._norm_module(b.get('module')), b.get('root_cause_std')]
                  for b in valid if b.get('root_cause_std')]),
             'dup_idx_ids': {id(b) for b in (valid[i] for i in dup_idx)},
         }
@@ -927,7 +1010,7 @@ class Analyzer:
         stats = defaultdict(lambda: {'case_total': 0, '通过': 0, '失败': 0,
                                      '回归用例': 0})
         for c in cases:
-            m = c.get('module') or '未知'
+            m = self._norm_module(c.get('module'))
             stats[m]['case_total'] += 1
             if c['status_std'] in ('通过', '失败'):
                 stats[m][c['status_std']] += 1
@@ -935,7 +1018,7 @@ class Analyzer:
                 stats[m]['回归用例'] += 1
         bug_by_mod = defaultdict(int)
         for b in valid:
-            bug_by_mod[b.get('module') or '未知'] += 1
+            bug_by_mod[self._norm_module(b.get('module'))] += 1
         modules = set(stats) | set(bug_by_mod)
         rows = []
         for m in modules:
@@ -954,13 +1037,25 @@ class Analyzer:
 
     def automation_priority(self, valid):
         """评分 = 0.3核心 + 0.2回归频率 + 0.2手工成本 + 0.2缺陷密度 + 0.1稳定性
-        （各维按模块归一化 0~1；缺用例数据时仅缺陷维并降权归一）。P0前20% / P1次30% / P2其余。"""
+        （各维按模块归一化 0~1；缺用例数据时仅缺陷维并降权归一）。P0前20% / P1次30% / P2其余。
+
+        模块口径：缺陷模块与用例模块均先归一化（module_aliases.json）；
+        归一化后仍未落入「本版缺陷模块 ∪ 别名目标模块」的用例视为未映射，
+        聚合计数说明、不进评分表——避免 XMind 路径级条目以 0.1 分噪声行刷屏。
+        """
         bug_by_mod = defaultdict(int)
         for b in valid:
-            bug_by_mod[b.get('module') or '未知'] += 1
+            bug_by_mod[self._norm_module(b.get('module'))] += 1
+        alias_targets = set(self._mod_alias.values()) if self._mod_alias else set()
         case_stats = {}
+        self.unmapped_case_count = 0
         if self.cases:
-            case_stats = {r['模块']: r for r in self._module_case_stats(self.cases, valid)}
+            for r in self._module_case_stats(self.cases, valid):
+                m = r['模块']
+                if m in bug_by_mod or m in alias_targets:
+                    case_stats[m] = r
+                else:
+                    self.unmapped_case_count += r['用例数']
         modules = sorted(set(bug_by_mod) | set(case_stats),
                          key=lambda m: -bug_by_mod.get(m, 0))
         if not modules:
@@ -1013,6 +1108,7 @@ class Analyzer:
         if not has_case:
             self.missing.append('缺少测试用例数据，自动化评分降级为仅缺陷维度')
         return {'modules': rows,
+                'unmapped_case_count': self.unmapped_case_count,
                 'formula': '总分=0.3×业务核心度+0.2×回归执行频率+0.2×手工测试成本'
                            '+0.2×历史缺陷密度+0.1×场景稳定性（按模块归一化）',
                 'priority_rule': '排序后 P0=前20%、P1=次30%、P2=其余；'
@@ -1085,6 +1181,23 @@ class Analyzer:
         }
         compare = self.compare(summary_core, overview, personnel)
 
+        # 结构化改进项对照：上版 improvement_items × 指标 delta 底稿（AI 只做定性判定；
+        # 本版改进项由 AI 定性完成后经 `cli.py improvements` 回写到本 JSON 的同名键）
+        improvement_check = None
+        prev_items = (self.prev_metrics or {}).get('improvement_items') or []
+        if prev_items:
+            improvement_check = []
+            prev_core = self.prev_metrics.get('summary_core', {})
+            for it in prev_items:
+                mk = it.get('metric')
+                row = {'改进项': it.get('内容') or it.get('item') or '-',
+                       '责任侧': it.get('责任侧') or it.get('owner') or '-',
+                       '验证指标': mk or '-'}
+                if mk and mk in summary_core:
+                    row['上版值'] = prev_core.get(mk)
+                    row['本版值'] = summary_core.get(mk)
+                improvement_check.append(row)
+
         return {
             'meta': {
                 'project': self.project,
@@ -1094,6 +1207,7 @@ class Analyzer:
                 'input_files': self.dataset.get('meta', {}).get('input_files', []),
                 'release_time': overview['legacy']['release_time'],
                 'release_time_source': overview['legacy']['release_time_source'],
+                'has_req_docs': self.has_req_docs,
             },
             'summary_core': summary_core,
             'overview': {k: v for k, v in overview.items() if k != 'dup_idx_ids'},
@@ -1103,5 +1217,7 @@ class Analyzer:
             'automation': auto,
             'risk_scan': risk,
             'compare': compare,
+            'improvement_items': [],
+            'improvement_check': improvement_check,
             'missing': sorted(set(self.missing)),
         }

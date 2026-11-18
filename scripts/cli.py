@@ -148,6 +148,36 @@ def _latest(reports_dir, prefix):
     return files[-1] if files else None
 
 
+def _data_health(root):
+    """缺陷导出数据健康快照（scan 阶段前置门禁）：
+
+    - 未分级占比：severity_std 为空/未分级 ÷ 总数（>50% 时严重程度分层全部失真）
+    - 分配时间缺失占比：assigned_at 缺失 ÷ 总数（影响响应时长样本量）
+    - 无效未闭环数：resolution 为无效类但状态组非已关闭（会混入遗留清单）
+    """
+    try:
+        dataset = _parse_defects(root, 'auto')
+    except SystemExit:
+        return None
+    bugs = dataset.get('bugs', [])
+    if not bugs:
+        return None
+    total = len(bugs)
+    unsev = sum(1 for b in bugs
+                if not b.get('severity_std') or b.get('severity_std') == '未分级')
+    unassigned = sum(1 for b in bugs if not b.get('assigned_at_dt'))
+    invalid_open = sum(
+        1 for b in bugs
+        if b.get('resolution_std') in nz.INVALID_RESOLUTION_STD
+        and b.get('status_group') != 'closed')
+    return {
+        'bug_total': total,
+        '未分级占比(%)': round(unsev * 100.0 / total, 2),
+        '分配时间缺失占比(%)': round(unassigned * 100.0 / total, 2),
+        '无效未闭环数': invalid_open,
+    }
+
+
 def detect_prev_version(root):
     """同项目下按版本号语义排序取上一版本目录。"""
     root = root.rstrip('/\\')
@@ -202,6 +232,18 @@ def cmd_scan(args):
         if techs_all:
             result['warnings'].append(
                 '检测到 tech_designs/ 文件，复盘完成后应追加技术方案评审报告')
+        # 数据健康门禁：填报质量问题前置暴露（analyze 前即可提示治理）
+        health = _data_health(root)
+        if health:
+            result['data_health'] = health
+            if health['未分级占比(%)'] is not None and health['未分级占比(%)'] > 50:
+                result['warnings'].append(
+                    '数据健康：严重程度未分级占比 %s%% 超过 50%%——分级统计将失真，'
+                    '建议先在平台补齐分级再复盘' % health['未分级占比(%)'])
+            if health['无效未闭环数']:
+                result['warnings'].append(
+                    '数据健康：%s 条无效缺陷状态未流转「已关闭」，将混入遗留清单'
+                    % health['无效未闭环数'])
     else:
         result['mode'] = 'review'
         reviewable = []
@@ -301,10 +343,11 @@ def cmd_parse(args):
     root = args.root.rstrip('/\\')
     project, version = _split_root(root)
     dataset = _parse_defects(root, args.platform)
-    reports_dir = os.path.join(root, 'reports')
-    os.makedirs(reports_dir, exist_ok=True)
+    # 2026-11-18 起中间数据落 .parsed/（parse 产物非报告，不再混入 reports/）
+    parsed_dir = os.path.join(root, '.parsed')
+    os.makedirs(parsed_dir, exist_ok=True)
     out = os.path.join(
-        reports_dir, '%s_%s_中间数据_缺陷标准集_%s.json' % (project, version, _ts()))
+        parsed_dir, '%s_%s_中间数据_缺陷标准集_%s.json' % (project, version, _ts()))
     with open(out, 'w', encoding='utf-8') as f:
         json.dump(dataset, f, ensure_ascii=False, indent=2)
     _print_json({
@@ -327,6 +370,16 @@ def _load_json(path):
         return json.load(f)
 
 
+def _latest_dataset(root, project, version):
+    """最新中间数据集：优先 {root}/.parsed/，兼容旧位置 reports/。"""
+    prefix = '%s_%s_中间数据_缺陷标准集_' % (project, version)
+    for d in ('.parsed', 'reports'):
+        p = _latest(os.path.join(root, d), prefix)
+        if p:
+            return p
+    return None
+
+
 def _parse_req_changes(root):
     """可选的需求变更记录文件：requirements/需求变更记录.csv（列含需求ID/变更内容）。"""
     path = os.path.join(root, 'requirements', '需求变更记录.csv')
@@ -340,8 +393,8 @@ def cmd_analyze(args):
     root = args.root.rstrip('/\\')
     project, version = _split_root(root)
     reports_dir = os.path.join(root, 'reports')
-    defects_file = getattr(args, 'defects_file', None) or _latest(
-        reports_dir, '%s_%s_中间数据_缺陷标准集_' % (project, version))
+    defects_file = getattr(args, 'defects_file', None) or _latest_dataset(
+        root, project, version)
     if not defects_file or not os.path.exists(defects_file):
         raise SystemExit('未找到标准中间数据集，请先执行 parse')
     dataset = _load_json(defects_file)
@@ -365,8 +418,10 @@ def cmd_analyze(args):
                      '%s_复盘数据_指标全量_' % ppv)
         if pm:
             prev_metrics = _load_json(pm)
-        pd_ = _latest(os.path.join(prev_root, 'reports'),
-                      '%s_中间数据_缺陷标准集_' % ppv)
+        pd_ = (_latest(os.path.join(prev_root, '.parsed'),
+                       '%s_中间数据_缺陷标准集_' % ppv)
+               or _latest(os.path.join(prev_root, 'reports'),
+                          '%s_中间数据_缺陷标准集_' % ppv))
         if pd_:
             prev_dataset = _load_json(pd_)
 
@@ -377,21 +432,26 @@ def cmd_analyze(args):
                      and os.path.splitext(fn)[1].lower() not in
                      ('.csv', '.xlsx', '.xls', '.json')] if has_req_docs else []
     team_roles = az.load_team_roles(root)
+    module_aliases, alias_path = az.load_module_aliases(root)
+    if alias_path:
+        print('模块归一化字典: %s' % alias_path)
 
     ana = az.Analyzer(
         dataset, release_time=release_time, testcase_cases=cases,
         req_change_rows=req_changes, prev_metrics=prev_metrics,
         prev_dataset=prev_dataset, project=project, version=version,
         has_req_docs=has_req_docs, team_roles=team_roles,
-        req_doc_names=req_doc_names)
+        req_doc_names=req_doc_names, module_aliases=module_aliases)
     ana.missing.extend(tc_warnings)
     metrics = ana.build()
-    files = reporter.write_reports(metrics, reports_dir)
+    anonymize = bool(getattr(args, 'anonymize', False))
+    files = reporter.write_reports(metrics, reports_dir, anonymize=anonymize)
     _print_json({
         'project': project, 'version': version,
         'bug_total': metrics['overview']['bug_total'],
         'resolved_rate(%)': metrics['overview']['resolved_rate(%)'],
         'missing': metrics['missing'],
+        'anonymized_md': anonymize,
         'outputs': files,
     })
     return files
@@ -404,6 +464,87 @@ def cmd_all(args):
                          '详见上方缺失清单')
     cmd_parse(args)
     return cmd_analyze(args)
+
+
+# ---------------------------------------------------------------------------
+# rerun：数据变更一键重跑（清同版旧产物 → scan → parse → analyze → html）
+# ---------------------------------------------------------------------------
+
+def cmd_rerun(args):
+    """终版前数据变更（发布前关单/补拉导出等）后的全链路重跑。
+
+    删除本版 reports/ 下旧产物与 .parsed/ 旧中间数据（避免新旧报告混淆），
+    再串 scan → parse → analyze → html。默认沿用会话里的 release-time（可覆盖）。
+    """
+    root = args.root.rstrip('/\\')
+    project, version = _split_root(root)
+    pv = '%s_%s' % (project, version)
+    removed = []
+    for d, patterns in (
+            ('reports', ('%s_素材校验_*.json' % pv,
+                         '%s_复盘报告_*.md' % pv,
+                         '%s_复盘报告_*.json' % pv,
+                         '%s_复盘报告_*.html' % pv,
+                         '%s_复盘数据_指标全量_*.json' % pv,
+                         '%s_中间数据_缺陷标准集_*.json' % pv)),
+            ('.parsed', ('%s_中间数据_缺陷标准集_*.json' % pv,))):
+        dd = os.path.join(root, d)
+        if not os.path.isdir(dd):
+            continue
+        for pat in patterns:
+            for f in glob.glob(os.path.join(dd, pat)):
+                os.remove(f)
+                removed.append(os.path.relpath(f, root))
+    # 沿用会话发布时间（显式传参优先）
+    if not getattr(args, 'release_time', None):
+        sess = _load_session()
+        if sess.get('project') == project and sess.get('version') == version:
+            args.release_time = sess['answers'].get('release_time') \
+                if sess['answers'].get('release_time') not in (None, '不清楚', '') else None
+    scan = cmd_scan(args)
+    if scan.get('mode') != 'retrospective':
+        raise SystemExit('scan 判定非复盘模式，rerun 仅适用于复盘链路')
+    cmd_parse(args)
+    files = cmd_analyze(args)
+    html = cmd_html(argparse.Namespace(root=root, metrics_file=None, doc=None))
+    _print_json({'removed_old': removed, 'outputs': (files or []) + [html]})
+    return files
+
+
+# ---------------------------------------------------------------------------
+# improvements：AI 定性完成后，把本版改进项回写进最新指标全量 JSON（结构化闭环）
+# ---------------------------------------------------------------------------
+
+def cmd_improvements(args):
+    """把改进项写进 {root}/reports 最新指标全量 JSON 的 improvement_items 键。
+
+    输入 --file 为 JSON 数组，每项 {"内容": "...", "责任侧": "测试|开发|产品", "metric": "可选验证指标键"}；
+    metric 取指标全量 summary_core 的键（如 avg_fix_hours / resolved_rate(%)），
+    下一版本 analyze 将自动生成「改进项 × 指标 delta」对照底稿。
+    """
+    root = args.root.rstrip('/\\')
+    project, version = _split_root(root)
+    pv = '%s_%s' % (project, version)
+    metrics_file = _latest(os.path.join(root, 'reports'),
+                           '%s_复盘数据_指标全量_' % pv)
+    if not metrics_file:
+        raise SystemExit('未找到本版指标全量 JSON，请先执行 analyze')
+    with open(args.file, 'r', encoding='utf-8') as f:
+        items = json.load(f)
+    if not isinstance(items, list) or not items:
+        raise SystemExit('improvements 文件应为非空 JSON 数组')
+    metrics = _load_json(metrics_file)
+    core_keys = set(metrics.get('summary_core') or {})
+    for it in items:
+        mk = it.get('metric')
+        if mk and mk not in core_keys:
+            raise SystemExit('metric 键 %r 不在 summary_core（可选键：%s）'
+                             % (mk, '、'.join(sorted(core_keys))))
+    metrics['improvement_items'] = items
+    with open(metrics_file, 'w', encoding='utf-8') as f:
+        json.dump(metrics, f, ensure_ascii=False, indent=2)
+    _print_json({'updated': metrics_file, 'improvement_items': items})
+    return metrics_file
 
 
 # ---------------------------------------------------------------------------
@@ -510,6 +651,8 @@ def main():
     sp.add_argument('--release-time', help='当前版本发布时间 YYYY-MM-DD HH:MM')
     sp.add_argument('--prev-root', help='上一版本目录（默认语义排序自动探测）')
     sp.add_argument('--defects-file', help='指定标准中间数据集 JSON（默认取最新）')
+    sp.add_argument('--anonymize', action='store_true',
+                    help='MD 渲染层人员名→成员NN（指标 JSON 保留真实值）')
     sp.set_defaults(func=cmd_analyze)
 
     sp = sub.add_parser('all', help='[复盘模式] scan + parse + analyze 串联')
@@ -519,6 +662,23 @@ def main():
     sp.add_argument('--platform', default='auto',
                     choices=['auto', 'jira', 'zentao', 'custom'])
     sp.set_defaults(func=cmd_all)
+
+    sp = sub.add_parser('rerun', help='[复盘模式] 数据变更一键重跑：清同版旧产物 + '
+                                     'scan→parse→analyze→html')
+    sp.add_argument('--root', required=True)
+    sp.add_argument('--release-time', help='覆盖发布时间（默认沿用会话答案）')
+    sp.add_argument('--prev-root')
+    sp.add_argument('--platform', default='auto',
+                    choices=['auto', 'jira', 'zentao', 'custom'])
+    sp.add_argument('--anonymize', action='store_true')
+    sp.set_defaults(func=cmd_rerun)
+
+    sp = sub.add_parser('improvements',
+                       help='AI 定性完成后回写本版改进项到指标全量 JSON（供下版自动对照）')
+    sp.add_argument('--root', required=True)
+    sp.add_argument('--file', required=True,
+                    help='JSON 数组文件：[{"内容":"...","责任侧":"测试","metric":"avg_fix_hours"}]')
+    sp.set_defaults(func=cmd_improvements)
 
     sp = sub.add_parser('html', help='生成汇总 HTML（复盘=仪表板模式 / 评审=文档模式，自动识别）')
     sp.add_argument('--root', required=True)

@@ -16,12 +16,13 @@ test-defect-retrospective/
 ├── README.md                    # 本文件
 ├── .session.json                # 问卷会话状态（自动生成，支持断点续跑）
 └── scripts/
-    ├── cli.py                   # CLI 入口：session / init / scan(模式路由) / parse / analyze / html / all
+    ├── cli.py                   # CLI 入口：session / init / scan(路由+数据门禁) / parse / analyze / all / rerun / improvements / html
     ├── normalize.py             # 值级标准化（状态/严重度/优先级/根因/时间/相似度）
-    ├── analyzer.py              # 全量指标计算 + XMind 用例解析（确定性，同输入必同输出）
-    ├── reporter.py              # 三类产物渲染（MD+JSON）+ 仪表板/文档双模式 HTML
+    ├── analyzer.py              # 全量指标计算 + XMind 用例解析 + 模块归一化（确定性，同输入必同输出）
+    ├── reporter.py              # 三类 MD 产物 + 仪表板/文档双模式 HTML（--anonymize 可脱敏）
     ├── docx_extract.py          # docx 文本提取（标准库，含删除线检测）
     ├── custom_field_map.json    # 自定义平台字段映射（问卷选「其他」时生成）
+    ├── module_aliases.json.example  # 模块归一化字典模板（项目级放 {项目名}/module_aliases.json）
     └── parsers/                 # 插件化解析器（新增平台只加插件，不改主逻辑）
         ├── __init__.py          # 注册表 + 平台自动探测
         ├── base.py              # 基类：CSV/Excel 读取、字段映射
@@ -55,8 +56,10 @@ python scripts/cli.py html    --root "项目A/v2.4.0"        # 汇总仪表板�
 ```
 
 4. **AI 定性补充**：脚本产出量化数据后，Skill 对【AI分析】章节补充定性内容（报告风格、需求质量四维、漏测风险、改进项校验等）；补充完重跑 `html` 即可纳入。
+5. **改进项回写**：`cli.py improvements --root … --file items.json` 把本版改进项写进指标全量 JSON——下版本 analyze 自动生成「改进项 × 指标对照」底稿，闭环不靠翻旧报告。
 
-- **幂等运行**：报告带时间戳，重复运行不覆盖历史、不改任何原始输入文件。
+- **幂等运行**：报告带时间戳，重复运行不覆盖历史、不改任何原始输入文件；**数据变更一键重跑** `cli.py rerun --root …`（清同版旧产物 + scan→parse→analyze→html）。
+- **数据健康门禁**：scan 阶段即提示未分级占比>50%、无效未闭环等填报问题（不必等 analyze 才发现分级统计失真）。
 
 ## 输入输出说明
 
@@ -71,10 +74,10 @@ python scripts/cli.py html    --root "项目A/v2.4.0"        # 汇总仪表板�
 | 人员角色.csv | `姓名,角色`（前端/后端/产品/测试）；提供后人员效能按真实角色分组、混入角色自动剔除，未提供按近似口径并警示 |
 | 上一版本目录 | 同项目下按版本号语义排序自动探测，读取其指标 JSON 做环比 |
 
-**输出**（reports/ 下，均带时间戳，命名 `{系统名}_{迭代号}_{产物分类}_{ts}`）：
+**输出**（reports/ 下，均带时间戳，命名 `{系统名}_{迭代号}_{产物分类}_{ts}`；parse 中间数据在 `.parsed/`）：
 
-- `复盘报告_产品/开发/测试_{ts}.md/.json` —— 三类复盘报告（产品 8 章 / 开发 7 章 / 测试 14 章）
-- `复盘数据_指标全量_{ts}.json` —— 全量指标结构化数据（供工具调用与下版本环比）
+- `复盘报告_产品/开发/测试_{ts}.md` —— 三类复盘报告（数据不支撑的章节整节隐藏；`--anonymize` 可将人员名渲染为 成员NN）
+- `复盘数据_指标全量_{ts}.json` —— 全量指标结构化数据（供工具调用与下版本环比；含 improvement_items 改进项闭环字段与遗留存活追踪）
 - `复盘报告_汇总_{ts}.html` —— 单文件自包含仪表板（零外部依赖，离线打开/迁移分享，支持打印分页）
 - `需求/用例/技术评审报告_{ts}.md` —— 评审模式产物（如需档案风 HTML 可选 `html --doc <md路径>`）
 
@@ -102,10 +105,11 @@ python scripts/cli.py html    --root "项目A/v2.4.0"        # 汇总仪表板�
 
 | 脚本 | 用途 |
 |---|---|
-| `scripts/jira_fetch.py` | PAT 按 sprint/JQL 拉取缺陷主表+活动日志+评论（标准库实现）；主表全字段补齐（分配/解决/关闭时间、重开次数等自 changelog 派生），明细自动落 `defects/明细/`，并生成 `人员角色_模板.csv` |
+| `scripts/jira_fetch.py` | PAT 按 sprint/JQL 拉取缺陷主表+活动日志+评论（标准库实现）；主表全字段补齐（分配/解决/关闭时间、重开次数等自 changelog 派生），明细自动落 `defects/明细/`，并生成 `人员角色_模板.csv`；`--sprint` 传版本号片段拉空时自动经 Agile API 匹配真实 sprint 名重试 |
 | `scripts/mht_extract.py` | MHTML 伪 .doc（网页另存为 Word 的常见产物）→ 纯文本 |
 | `scripts/docx_extract.py` | OOXML docx → 纯文本（含删除线检测） |
 | `scripts/custom_field_map.json` | 内置「Jira API 拉取表头 → 标准字段」映射，配合 `parse --platform custom` |
+| `scripts/module_aliases.json.example` | 模块归一化字典模板（缺陷平台模块与用例路径 → 统一业务模块；项目级放 `{项目名}/module_aliases.json`） |
 
 ```bash
 # PAT 拉取示例（PAT 亦可由环境变量 JIRA_PAT 提供）

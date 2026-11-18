@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
-"""报告生成模块：渲染 3 大类产物（MD+JSON）与单文件汇总 HTML（工业质检档案风）。
+"""报告生成模块：渲染 3 类复盘 MD 报告、指标全量 JSON 与单文件汇总 HTML（工业质检档案风）。
 
 规则：
-- 章节结构与 SKILL.md 第四节完全一致，不得增减；
-- 双格式输出：Markdown 可读报告 + JSON 结构化数据（+汇总 HTML，零外部依赖）；
+- 章节结构与 SKILL.md 第四节一致；数据不支撑的章节整节隐藏（不以缺失占位/空表刷屏）；
+- MD 为最终产物（复盘模式另出指标全量 JSON + 汇总 HTML；分角色 JSON 已于 2026-11-18 裁撤——无下游消费）；
 - 文件名带时间戳，幂等运行不覆盖历史报告；
 - 数据缺失的章节末尾统一标注：⚠️ 【数据缺失】缺少XX文件/字段，该项暂无法分析；
 - AI 定性内容以「【AI分析】」占位标记预留，由 Skill 侧追加补充；
+- --anonymize 时仅 MD 渲染层做人员名→成员NN 替换（指标 JSON 保留真实值供环比）；
 - 纯需求评审等单文档产物用 render_doc_html 渲染为档案风文档 HTML。
 """
 import json
@@ -16,6 +17,17 @@ import time
 
 MISSING_MARK = '⚠️ 【数据缺失】'
 AI_MARK = '【AI分析】'
+
+# 人员脱敏（仅渲染层）：write_reports 按 metrics 人员名单构建映射
+_ANON = {'enabled': False, 'map': {}}
+
+
+def _anon(name):
+    """人名 → 成员NN（未启用或名单外原样返回）。"""
+    n = str(name or '').strip()
+    if not n or n == '-' or not _ANON['enabled']:
+        return name
+    return _ANON['map'].get(n, name)
 
 
 def _ts():
@@ -57,7 +69,7 @@ def _brief_table(items, limit=200):
     """缺陷清单摘要表。"""
     rows = [{'编号': i.get('bug_id'), '标题': i.get('title'), '模块': i.get('module'),
              '严重程度': i.get('severity'), '状态': i.get('status') or i.get('status_group'),
-             '提报人': i.get('reporter')}
+             '提报人': _anon(i.get('reporter'))}
             for i in (items or [])[:limit]]
     return _table(rows)
 
@@ -68,12 +80,14 @@ def _brief_table(items, limit=200):
 
 def build_product(m):
     meta, req, ov = m['meta'], m['requirement'], m['overview']
-    has_req_doc = not any('需求文档' in x for x in m['missing'])
+    has_req_doc = bool(meta.get('has_req_docs'))
     sec = {}
 
-    sec['一、需求文档评审结论'] = (
-        _ai_placeholder('逻辑自洽性 / 重复赘述 / 文案可读性 / 提示语清晰度 四维评估')
-        if has_req_doc else _missing_line('requirements/ 需求文档文件'))
+    # 需求侧章节（一/三/七）依赖需求文档：无文档时整节隐藏（缺失信息已在头部清单），
+    # 不再以缺失占位章节刷屏；缺陷数据即可支撑的章节（四/五/八）保持常驻。
+    if has_req_doc:
+        sec['一、需求文档评审结论'] = _ai_placeholder(
+            '逻辑自洽性 / 重复赘述 / 文案可读性 / 提示语清晰度 四维评估')
 
     # 根因字段未启用：模块×需求根因关联整节不渲染（不以空表/缺失占位展示）
     if req['module_req_issues']:
@@ -85,7 +99,7 @@ def build_product(m):
             '需求变更总频次：**%s** ｜ 变更需求数：**%s** ｜ 连锁缺陷总数：**%s**（占比 %s%%）\n\n%s'
             % (cs['变更总频次'], cs['变更需求数'], cs['连锁缺陷总数'],
                cs['连锁缺陷占比(%)'], _table(cs['变更明细'])))
-    else:
+    elif has_req_doc:
         sec['三、需求变更统计与变更连锁缺陷分析'] = (
             _missing_line('requirements/需求变更记录.csv 文件（含需求ID、变更内容列）'))
 
@@ -116,16 +130,20 @@ def build_product(m):
         if r['count'] else
         '未识别到根因为「需求问题」的缺陷（需缺陷导出含根因字段）。')
 
-    sec['七、产品交互体验评估与优化建议'] = (
-        _ai_placeholder('基于需求文档与缺陷分布评估交互体验合理性')
-        if has_req_doc else _missing_line('requirements/ 需求文档文件'))
+    if has_req_doc:
+        sec['七、产品交互体验评估与优化建议'] = _ai_placeholder(
+            '基于需求文档与缺陷分布评估交互体验合理性')
 
     lg = ov['legacy']
     if lg['count']:
-        sec['八、历史遗留缺陷风险提示'] = (
-            '存量遗留缺陷：**%s** 条（发布时间基准：%s，口径：%s）\n\n%s'
-            % (lg['count'], lg['release_time'] or '未知', lg['release_time_source'] or '-',
-               _brief_table(lg['items'])))
+        body = ('存量遗留缺陷：**%s** 条（发布时间基准：%s，口径：%s）\n\n%s'
+                % (lg['count'], lg['release_time'] or '未知',
+                   lg['release_time_source'] or '-', _brief_table(lg['items'])))
+        st = lg.get('survived_tracking')
+        if st:
+            body += ('\n\n**跨版本存活追踪**（与上版遗留清单按编号对齐，推动清账）\n\n%s'
+                     % _table(st))
+        sec['八、历史遗留缺陷风险提示'] = body
     elif '发布时间' in ''.join(m['missing']):
         sec['八、历史遗留缺陷风险提示'] = _missing_line('发布时间与创建时间字段')
     else:
@@ -165,7 +183,7 @@ def build_dev(m):
         % (oc['count'], oc['rate(%)'], _brief_table(oc['items']))
         if oc['count'] else '未识别到偶现缺陷。')
 
-    dev_rows = [{'开发人员': d['开发人员'], '角色': d.get('角色', '-'),
+    dev_rows = [{'开发人员': _anon(d['开发人员']), '角色': d.get('角色', '-'),
                  '已修复总数': d['已修复总数'],
                  '平均修复时长(小时)': d['平均修复时长(小时)'],
                  '缺陷回弹率(%)': d['缺陷回弹率(%)']}
@@ -173,7 +191,7 @@ def build_dev(m):
     layered = []
     for d in ps['devs']:
         for sev, h in (d.get('分层修复时长') or {}).items():
-            layered.append({'开发人员': d['开发人员'], '角色': d.get('角色', '-'),
+            layered.append({'开发人员': _anon(d['开发人员']), '角色': d.get('角色', '-'),
                             '严重程度': sev,
                             '平均修复时长(小时)': h})
     sec['四、开发个人修复时效（按严重等级分层）'] = (
@@ -181,7 +199,7 @@ def build_dev(m):
         if dev_rows else _table(dev_rows) + '\n' +
         _missing_line('解决时间/分配时间字段，无法计算修复时效'))
 
-    bounce_rows = [{'开发人员': d['开发人员'], '角色': d.get('角色', '-'),
+    bounce_rows = [{'开发人员': _anon(d['开发人员']), '角色': d.get('角色', '-'),
                     '已修复总数': d['已修复总数'],
                     '回弹数(重开>0)': round(d['已修复总数'] * d['缺陷回弹率(%)'] / 100)
                     if d['缺陷回弹率(%)'] is not None else None,
@@ -214,10 +232,10 @@ def build_test(m):
     sec = {}
 
     # 第一章（提报维度）与第二章（验证维度）列拆分，避免两章渲染同一张全列表格
-    report_rows = [{'测试人员': t['测试人员'], '角色': t.get('角色', '-'),
+    report_rows = [{'测试人员': _anon(t['测试人员']), '角色': t.get('角色', '-'),
                     '提交Bug数': t['提交Bug数'],
                     '个人占比(%)': t['个人占比(%)']} for t in ps['testers']]
-    verify_rows = [{'测试人员': t['测试人员'], '角色': t.get('角色', '-'),
+    verify_rows = [{'测试人员': _anon(t['测试人员']), '角色': t.get('角色', '-'),
                     '验证总数': t['验证总数'],
                     '首次验证通过率(%)': t['首次验证通过率(%)'],
                     '驳回重修复率(%)': t['驳回重修复率(%)'],
@@ -237,40 +255,52 @@ def build_test(m):
     else:
         sec['三、版本环比全量分析'] = _missing_line('上一版本复盘报告/指标数据')
 
-    sec['四、上一轮改进项落地效果校验'] = (
-        _ai_placeholder('逐项核对上一版本报告中的改进建议，结合本版本数据给出落地效果结论')
-        if cmp else _missing_line('上一版本复盘报告'))
+    # 上版改进项结构化对照底稿（improvement_items 回写后自动生成，AI 只做定性判定）
+    ic = m.get('improvement_check')
+    if ic:
+        sec['四、上一轮改进项落地效果校验'] = (
+            '**上版改进项 × 本版指标对照**（来自上版指标 JSON 的 improvement_items）\n\n%s\n\n%s'
+            % (_table(ic),
+               _ai_placeholder('逐项判定落地状态（已落地/部分落地/未落地）并给出证据；'
+                               '验证指标数值仅供参考，定性结论须结合口径说明')))
+    else:
+        sec['四、上一轮改进项落地效果校验'] = (
+            _ai_placeholder('逐项核对上一版本报告中的改进建议，结合本版本数据给出落地效果结论')
+            if cmp else _missing_line('上一版本复盘报告'))
 
+    # 用例章节（五~七）：tc 缺失或既无编号关联又无需求文档可匹配时不渲染空壳章节
     if tc:
-        p5 = ['用例总数 **%s**' % tc['case_total']]
-        if tc.get('exec_trackable'):
-            p5.append('已执行 **%s** ｜ 执行覆盖率 **%s%%**\n\n%s'
-                      % (tc['executed'], tc['exec_coverage(%)'],
-                         _table(tc['status_dist'])))
-        if tc.get('defect_case_linkable'):
-            rc = tc['req_coverage']
-            p5.append('**需求-用例双向覆盖（编号关联）**：缺陷关联需求 %s 个，被用例覆盖'
-                      ' %s 个（%s%%）；用例关联需求完整率 %s%%'
-                      % (rc['缺陷关联需求数'], rc['被用例覆盖数'],
-                         rc['需求被用例覆盖比例(%)'],
-                         rc['用例关联需求完整率(%)']))
-            if rc['未覆盖需求清单']:
-                p5.append(_table([{'未覆盖需求': x}
-                                  for x in rc['未覆盖需求清单']]))
+        linkable = tc.get('defect_case_linkable')
         rcm = tc.get('req_case_match')
-        if rcm:
-            p5.append('**需求-用例关联分析（名称匹配·查漏配）**：需求 %s 个，已覆盖 %s 个，'
-                      '疑似漏配 %s 个\n\n%s\n\n%s'
-                      % (rcm['需求总数'], rcm['已覆盖'], rcm['疑似漏配'],
-                         _table(rcm['明细']),
-                         _table([{'漏配需求': x} for x in rcm['漏配清单']])
-                         if rcm['漏配清单'] else '（未发现漏配需求）'))
-        if not tc.get('exec_trackable') and not tc.get('defect_case_linkable'):
-            p5.append('> 口径说明：缺陷与用例之间缺少编号关联字段，且用例无执行状态，'
-                      '执行覆盖率/阻塞/回归/模块缺陷-用例缺口等指标**不分析**；'
-                      '本节仅呈现需求-用例关联分析结果。')
-        sec['五、用例与需求关联分析' if not tc.get('defect_case_linkable')
-            else '五、用例覆盖率与需求-用例双向追踪'] = '\n\n'.join(p5)
+        if linkable or rcm:
+            p5 = ['用例总数 **%s**' % tc['case_total']]
+            if tc.get('exec_trackable'):
+                p5.append('已执行 **%s** ｜ 执行覆盖率 **%s%%**\n\n%s'
+                          % (tc['executed'], tc['exec_coverage(%)'],
+                             _table(tc['status_dist'])))
+            if linkable:
+                rc = tc['req_coverage']
+                p5.append('**需求-用例双向覆盖（编号关联）**：缺陷关联需求 %s 个，被用例覆盖'
+                          ' %s 个（%s%%）；用例关联需求完整率 %s%%'
+                          % (rc['缺陷关联需求数'], rc['被用例覆盖数'],
+                             rc['需求被用例覆盖比例(%)'],
+                             rc['用例关联需求完整率(%)']))
+                if rc['未覆盖需求清单']:
+                    p5.append(_table([{'未覆盖需求': x}
+                                      for x in rc['未覆盖需求清单']]))
+            if rcm:
+                p5.append('**需求-用例关联分析（名称匹配·查漏配）**：需求 %s 个，已覆盖 %s 个，'
+                          '疑似漏配 %s 个\n\n%s\n\n%s'
+                          % (rcm['需求总数'], rcm['已覆盖'], rcm['疑似漏配'],
+                             _table(rcm['明细']),
+                             _table([{'漏配需求': x} for x in rcm['漏配清单']])
+                             if rcm['漏配清单'] else '（未发现漏配需求）'))
+            if not tc.get('exec_trackable') and not linkable:
+                p5.append('> 口径说明：缺陷与用例之间缺少编号关联字段，且用例无执行状态，'
+                          '执行覆盖率/阻塞/回归/模块缺陷-用例缺口等指标**不分析**；'
+                          '本节仅呈现需求-用例关联分析结果。')
+            sec['五、用例与需求关联分析' if not linkable
+                else '五、用例覆盖率与需求-用例双向追踪'] = '\n\n'.join(p5)
         if tc.get('exec_trackable'):
             sec['六、测试阻塞事件统计'] = (
                 '阻塞用例 **%s** 条\n\n%s' % (
@@ -282,10 +312,6 @@ def build_test(m):
             sec['七、回归工作量统计'] = (
                 '回归用例数 **%s** ｜ 回归执行时长合计 **%s 分钟**'
                 % (rg['regression_case_count'], rg['regression_duration_min']))
-    else:
-        for title in ('五、用例与需求关联分析', '六、测试阻塞事件统计',
-                      '七、回归工作量统计'):
-            sec[title] = _missing_line('test_cases/ 测试用例文件')
 
     kw_lines = '\n'.join('- %s：%s' % (k, '、'.join(v[:10]))
                          for k, v in risk['keyword_hits'].items())
@@ -295,18 +321,16 @@ def build_test(m):
         sec['八、潜在漏测风险清单'] = (
             '**高风险场景关键词命中**\n%s\n\n**模块缺陷-用例缺口**\n%s\n\n%s'
             % (kw_lines or '（无命中）', gap_table,
-               _ai_placeholder('结合边界/并发/大数据量/弱网场景补充漏测风险清单')))
+               _ai_placeholder('结合边界/并发/大数据量/弱网场景补充漏测风险清单；'
+                               '测试/生产环境差异线索（如有）也在本节一并评估')))
     else:
         sec['八、潜在漏测风险清单'] = (
             '**高风险场景关键词命中**\n%s\n\n%s'
             % (kw_lines or '（无命中）',
-               _ai_placeholder('结合边界/并发/大数据量/弱网场景补充漏测风险清单')))
+               _ai_placeholder('结合边界/并发/大数据量/弱网场景补充漏测风险清单；'
+                               '测试/生产环境差异线索（如有）也在本节一并评估')))
 
-    sec['九、测试环境配置差异风险'] = (
-        _ai_placeholder('向用户收集测试环境与生产配置差异信息后评估风险；'
-                        '用户提供前标注为待补充'))
-
-    sec['十、用例设计短板与优化建议'] = _ai_placeholder(
+    sec['九、用例设计短板与优化建议'] = _ai_placeholder(
         '基于用例覆盖缺口、失败分布与缺陷分布给出用例设计优化建议')
 
     if auto:
@@ -314,22 +338,23 @@ def build_test(m):
                       '投入产出评级': r['投入产出评级'], 'Bug数': r['Bug数'],
                       '用例数': r['用例数'], '回归用例数': r['回归用例数'],
                       '评分维度': r['评分维度']} for r in auto['modules']]
-        sec['十一、自动化优先级覆盖清单（接口、UI分层）'] = (
-            '评分公式：%s\n\n优先级规则：%s\n\n%s\n\n%s'
+        unmapped = auto.get('unmapped_case_count') or 0
+        unmapped_note = ('\n\n> 口径说明：另有 **%s** 条用例的模块未能映射到业务模块'
+                         '（module_aliases.json 未覆盖其路径/模块名），不参与评分。'
+                         % unmapped) if unmapped else ''
+        sec['十、自动化优先级覆盖清单（接口、UI分层）'] = (
+            '评分公式：%s\n\n优先级规则：%s\n\n%s%s\n\n%s'
             % (auto['formula'], auto['priority_rule'], _table(auto_rows),
+               unmapped_note,
                _ai_placeholder('基于模块属性给出接口自动化 / UI自动化分层建议与理由')))
     else:
-        sec['十一、自动化优先级覆盖清单（接口、UI分层）'] = _missing_line(
+        sec['十、自动化优先级覆盖清单（接口、UI分层）'] = _missing_line(
             '缺陷与用例数据（无法计算模块评分）')
-
-    sec['十二、可封装Skill工作清单'] = _ai_placeholder(
-        '识别本复盘流程中可复用/重复性高的工作（如数据导出清洗、指标拉取、报告初稿），'
-        '给出可封装为新 Skill 的清单')
 
     lc = ps['lifecycle']
     lc_rows = [{'阶段': k, '平均(小时)': v['平均(小时)'], '样本数': v['样本数']}
                for k, v in lc.items()]
-    sec['十三、测试流程改进建议'] = (
+    sec['十一、测试流程改进建议'] = (
         _ai_placeholder('基于全量数据给出测试流程改进建议') +
         '\n\n**缺陷全生命周期各阶段耗时分布**（供流程分析）\n\n' + _table(lc_rows) +
         '\n\n' + '\n\n'.join(
@@ -337,9 +362,9 @@ def build_test(m):
             for k, v in lc.items() if v['分布']))
 
     dup = ov['duplicates']
-    dup_rows = [{'测试人员': t['测试人员'], '提交Bug数': t['提交Bug数'],
+    dup_rows = [{'测试人员': _anon(t['测试人员']), '提交Bug数': t['提交Bug数'],
                  '重复上报Bug率(%)': t['重复上报Bug率(%)']} for t in ps['testers']]
-    sec['十四、重复上报缺陷率统计'] = (
+    sec['十二、重复上报缺陷率统计'] = (
         '整体重复缺陷率 **%s%%**（%s 条）\n\n%s'
         % (dup['rate(%)'], dup['count'], _table(dup_rows)))
     return sec
@@ -375,39 +400,51 @@ def _render_md(category, m, sections):
     return '\n'.join(lines)
 
 
-def write_reports(metrics, reports_dir):
-    """生成 3 类产物（MD+JSON）+ 指标全量 JSON，返回文件路径清单。"""
+def write_reports(metrics, reports_dir, anonymize=False):
+    """生成 3 份复盘 MD + 指标全量 JSON，返回文件路径清单。
+
+    2026-11-18 起不再输出分角色 JSON（复盘报告_产品/开发/测试_*.json）——
+    环比与汇总 HTML 均只消费指标全量 JSON，分角色 JSON 为无下游冗余产物。
+    anonymize=True 时 MD 渲染层将人员名替换为 成员NN（指标 JSON 保留真实值）。
+    """
     os.makedirs(reports_dir, exist_ok=True)
     ts = _ts()
     meta = metrics['meta']
     base = '%s_%s' % (meta['project'], meta['version'])   # 系统名_迭代号 前缀
+
+    # 构建脱敏映射（人员表格 + 缺陷摘要中的所有真实人名）
+    _ANON['enabled'] = bool(anonymize)
+    _ANON['map'] = {}
+    if anonymize:
+        names = set()
+        ps = metrics.get('personnel') or {}
+        for t in ps.get('testers') or []:
+            names.add(str(t.get('测试人员') or '').strip())
+        for d in ps.get('devs') or []:
+            names.add(str(d.get('开发人员') or '').strip())
+        for it in ((metrics.get('overview') or {}).get('legacy') or {}).get('items') or []:
+            for k in ('reporter', 'assignee', 'resolver'):
+                names.add(str(it.get(k) or '').strip())
+        names.discard('')
+        names.discard('-')
+        for i, n in enumerate(sorted(names), 1):
+            _ANON['map'][n] = '成员%02d' % i
+
     out = []
     for category, builder in _BUILDERS.items():
         sections = builder(metrics)
         md_name = '%s_复盘报告_%s_%s.md' % (base, category, ts)
-        json_name = '%s_复盘报告_%s_%s.json' % (base, category, ts)
         md_path = _unique_path(os.path.join(reports_dir, md_name))
-        json_path = _unique_path(os.path.join(reports_dir, json_name))
         with open(md_path, 'w', encoding='utf-8') as f:
             f.write(_render_md(category, metrics, sections))
-        payload = {
-            'category': category,
-            'project': meta['project'],
-            'version': meta['version'],
-            'generated_at': meta['generated_at'],
-            'source_platform': meta['platform'],
-            'missing': metrics['missing'],
-            'sections': sections,
-            'summary_core': metrics['summary_core'],
-        }
-        with open(json_path, 'w', encoding='utf-8') as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
-        out += [md_path, json_path]
+        out.append(md_path)
     full_path = _unique_path(os.path.join(
         reports_dir, '%s_复盘数据_指标全量_%s.json' % (base, ts)))
     with open(full_path, 'w', encoding='utf-8') as f:
         json.dump(metrics, f, ensure_ascii=False, indent=2)
     out.append(full_path)
+    _ANON['enabled'] = False
+    _ANON['map'] = {}
     return out
 
 

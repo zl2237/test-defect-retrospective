@@ -121,19 +121,52 @@ def fetch_issues(base, jql, headers):
         start += 100
 
 
+def resolve_sprint_name(base, headers, project, token):
+    """按版本号片段自动发现 sprint 名称（如 1.9.0 → 「Sprint 1.9.0」）。
+
+    经历：Agile API 列出项目 board 的 sprint → 名称包含 token 的（唯一/最新）命中。
+    拉不到 board / 无命中返回 None（调用方回退为把 token 当 sprint 名称直接试）。
+    """
+    try:
+        boards = _get_json(base, '/rest/agile/1.0/board',
+                           {'projectKeyOrId': project, 'maxResults': 10}, headers)
+        board_values = (boards.get('values') or [])
+        if not board_values:
+            return None
+        board_id = board_values[0]['id']
+        sprints = _get_json(base, '/rest/agile/1.0/board/%s/sprint' % board_id,
+                            {'maxResults': 100, 'state': 'closed,closedfuture,active,future'},
+                            headers)
+        names = [s.get('name') or '' for s in (sprints.get('values') or [])]
+        hits = [n for n in names if token in n]
+        if not hits:
+            return None
+        # 多个命中（如同名含前缀）取列表最后一个（通常最新）
+        print('[提示] sprint 自动发现：%s → %s' % (token, hits[-1]))
+        return hits[-1]
+    except SystemExit:
+        return None
+
+
 def search_with_types(base, headers, project, sprint, types, args_jql):
     """执行搜索，返回 (issues, jql)。JQL 默认按 issuetype 过滤，
-    若实例缺少某类型（400「域中没有"X"值」）则自动剔除该类型后重试。"""
+    若实例缺少某类型（400「域中没有"X"值」）则自动剔除该类型后重试。
+
+    sprint 自动发现：非数字 sprint 按 JQL 精确名查询返回 0 条时，
+    经 Agile API 按版本号片段匹配真实 sprint 名后重试（避免「sprint 27 为空、
+    实际叫 Sprint 1.9.0」这类人工试错）。
+    """
     if args_jql:
         return list(fetch_issues(base, args_jql, headers)), args_jql
     types = [t.strip() for t in types.split(',') if t.strip()]
+    sprint_resolved = False
     while True:
         # 数字 sprint 为内部 ID，需不加引号；名称则加引号
         sprint_cond = sprint if str(sprint).isdigit() else '"%s"' % sprint
         jql = 'project = %s AND issuetype in (%s) AND sprint = %s' % (
             project, ', '.join('"%s"' % t for t in types), sprint_cond)
         try:
-            return list(fetch_issues(base, jql, headers)), jql
+            issues = list(fetch_issues(base, jql, headers))
         except SystemExit as e:
             missing = re.findall(r'没有["“]([^"”]+)["”]值', str(e))
             if missing and any(m in types for m in missing):
@@ -142,6 +175,13 @@ def search_with_types(base, headers, project, sprint, types, args_jql):
                     print('[提示] 实例缺少类型 %s，已自动剔除，剩余：%s' % (missing, types))
                     continue
             raise
+        if not issues and not str(sprint).isdigit() and not sprint_resolved:
+            resolved = resolve_sprint_name(base, headers, project, str(sprint))
+            if resolved and resolved != str(sprint):
+                sprint = resolved
+                sprint_resolved = True
+                continue
+        return issues, jql
 
 
 # ---------------------------------------------------------------- 字段抽取与派生
